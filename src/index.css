@@ -35,3 +35,31 @@
     @apply bg-background text-foreground;
   }
 }
+
+/* html5-qrcode: force the library's injected <video> to fill its container
+   Without this the video element renders at intrinsic stream size (often 0)
+   and the scanner appears as a white/blank box. */
+#barcode-reader {
+  position: relative;
+  min-height: 280px;
+  background: #000;
+}
+#barcode-reader video {
+  width: 100% !important;
+  height: 100% !important;
+  object-fit: cover !important;
+  position: absolute;
+  inset: 0;
+}
+#barcode-reader > div {
+  width: 100% !important;
+  height: 100% !important;
+}
+#barcode-reader__scan_region {
+  width: 100% !important;
+  height: 100% !important;
+  background: transparent !important;
+}
+#barcode-reader__scan_region img {
+  display: none !important;
+}

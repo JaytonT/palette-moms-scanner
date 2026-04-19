@@ -26,10 +26,13 @@ export const BarcodeScanner = ({ onScanSuccess, isScanning, onClose, onPhotoFall
   };
 
   useEffect(() => {
-    if (isScanning) {
+    if (!isScanning) return;
+    // Defer start until after the DOM is painted so #barcode-reader has real dimensions
+    const rafId = requestAnimationFrame(() => {
       startScanning();
-    }
+    });
     return () => {
+      cancelAnimationFrame(rafId);
       stopScanning();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -37,29 +40,51 @@ export const BarcodeScanner = ({ onScanSuccess, isScanning, onClose, onPhotoFall
 
   const startScanning = async () => {
     try {
-      const scanner = new Html5Qrcode("barcode-reader");
+      if (!window.isSecureContext) {
+        toast.error("Camera requires HTTPS", {
+          description: "Open the app over HTTPS (or localhost) to use the camera.",
+        });
+        onClose();
+        return;
+      }
+
+      if (!navigator.mediaDevices?.getUserMedia) {
+        toast.error("Camera not supported", {
+          description: "This browser doesn't support camera access.",
+        });
+        onClose();
+        return;
+      }
+
+      const scanner = new Html5Qrcode("barcode-reader", { verbose: false });
       scannerRef.current = scanner;
 
       await scanner.start(
-        { facingMode: "environment" },
+        { facingMode: { ideal: "environment" } },
         {
           fps: 10,
-          qrbox: { width: 250, height: 250 },
+          qrbox: (w, h) => {
+            const edge = Math.floor(Math.min(w, h) * 0.75);
+            return { width: edge, height: edge };
+          },
+          aspectRatio: 1.0,
+          disableFlip: false,
         },
         (decodedText) => {
           onScanSuccess(decodedText);
           stopScanning();
         },
         (_error) => {
-          // Ignore per-frame errors during scanning
+          // per-frame decode errors are expected, ignore
         }
       );
 
       setIsCameraReady(true);
     } catch (err) {
       console.error("Error starting scanner:", err);
+      const msg = err instanceof Error ? err.message : String(err);
       toast.error("Camera Error", {
-        description: "Could not access camera. Please check permissions.",
+        description: msg || "Could not access camera. Please check permissions.",
       });
       onClose();
     }
@@ -96,14 +121,14 @@ export const BarcodeScanner = ({ onScanSuccess, isScanning, onClose, onPhotoFall
             <X className="h-6 w-6" />
           </Button>
 
-          <div className="relative overflow-hidden rounded-2xl shadow-elevated bg-card">
+          <div className="relative overflow-hidden rounded-2xl shadow-elevated bg-black aspect-square">
             <div
               id="barcode-reader"
-              className="w-full aspect-square"
+              className="absolute inset-0 w-full h-full"
             />
             {!isCameraReady && (
-              <div className="absolute inset-0 flex items-center justify-center bg-muted/50">
-                <Camera className="h-12 w-12 animate-pulse text-muted-foreground" />
+              <div className="absolute inset-0 flex items-center justify-center bg-black/70 pointer-events-none">
+                <Camera className="h-12 w-12 animate-pulse text-white" />
               </div>
             )}
           </div>
