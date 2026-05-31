@@ -67,9 +67,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   try {
     const response = await client.messages.parse({
-      model: "claude-opus-4-8",
+      // Haiku 4.5: this is OCR-style label reading, not reasoning. Both an
+      // adversarial pro-Gemini and pro-Claude review agreed Opus is overkill
+      // here (and its high-res image tokenization costs MORE per phone photo).
+      model: "claude-haiku-4-5",
       max_tokens: 1024,
-      thinking: { type: "disabled" },
       system: SYSTEM,
       messages: [
         {
