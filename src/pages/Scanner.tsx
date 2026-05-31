@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { toast } from "sonner";
 import { lookupBarcode } from "@/lib/barcode-lookup";
+import { identifyProductFromImage } from "@/lib/identify-product";
 import { ProductForm } from "@/components/ProductForm";
 import { BarcodeScanner } from "@/components/BarcodeScanner";
 import type { ProductData } from "@/types/product";
@@ -8,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Loader2, Camera, PenLine } from "lucide-react";
+import { Loader2, Camera, PenLine, Sparkles } from "lucide-react";
 
 function ManualEntry(): ProductData {
   return {
@@ -34,18 +35,39 @@ function ManualEntry(): ProductData {
 
 export function Scanner() {
   const [loading, setLoading] = useState(false);
+  const [loadingLabel, setLoadingLabel] = useState("Looking up product...");
   const [product, setProduct] = useState<ProductData | null>(null);
   const [manualBarcode, setManualBarcode] = useState("");
   const [isScanning, setIsScanning] = useState(false);
+  const photoInputRef = useRef<HTMLInputElement>(null);
 
   const handleLookup = async (barcode: string) => {
+    setLoadingLabel("Looking up product...");
     setLoading(true);
     try {
       const data = await lookupBarcode(barcode.trim());
       setProduct(data);
     } catch {
       toast.error("Lookup failed", {
-        description: "Could not fetch product info. Try manual entry.",
+        description: "Could not fetch product info. Try a photo or manual entry.",
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleIdentifyPhoto = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    setLoadingLabel("Reading the package...");
+    setLoading(true);
+    try {
+      const data = await identifyProductFromImage(file);
+      setProduct(data);
+    } catch (err) {
+      toast.error("Could not identify product", {
+        description: err instanceof Error ? err.message : "Try again or use manual entry.",
       });
     } finally {
       setLoading(false);
@@ -89,7 +111,7 @@ export function Scanner() {
           <Card>
             <CardContent className="flex items-center justify-center py-12 gap-3">
               <Loader2 className="h-6 w-6 animate-spin text-primary" />
-              <span className="text-muted-foreground">Looking up product...</span>
+              <span className="text-muted-foreground">{loadingLabel}</span>
             </CardContent>
           </Card>
         ) : (
@@ -97,10 +119,31 @@ export function Scanner() {
             <Button
               size="lg"
               className="w-full h-16 text-lg gap-3"
+              onClick={() => photoInputRef.current?.click()}
+            >
+              <Sparkles className="h-6 w-6" />
+              Identify by Photo
+            </Button>
+            <input
+              ref={photoInputRef}
+              type="file"
+              accept="image/*"
+              aria-label="Take or upload a product photo"
+              className="hidden"
+              onChange={handleIdentifyPhoto}
+            />
+            <p className="text-center text-xs text-muted-foreground -mt-2">
+              Snap the front of the package. Best for items not in barcode databases.
+            </p>
+
+            <Button
+              size="lg"
+              variant="outline"
+              className="w-full h-14 text-base gap-3"
               onClick={() => setIsScanning(true)}
             >
-              <Camera className="h-6 w-6" />
-              Start Camera Scan
+              <Camera className="h-5 w-5" />
+              Scan Barcode
             </Button>
 
             <div className="relative">
