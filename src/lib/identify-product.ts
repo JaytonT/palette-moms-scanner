@@ -7,23 +7,31 @@ export interface VisionResult {
   brand: string;
   category: string;
   description: string;
-  weight: string;
-  dimensions: string;
+  weightLbs: number;
+  weightFromPackage: boolean;
+  heightInches: number;
+  lengthInches: number;
+  depthInches: number;
   averagePrice: string;
+  priceFromLabel: boolean;
   barcode: string;
   seoTitle: string;
   seoDescription: string;
-  weightFromPackage: boolean;
-  priceFromLabel: boolean;
   confidence: "high" | "medium" | "low";
 }
 
 // Pure: turn a vision result into a ProductData for the form.
 // estimatedFields drives the "estimate" tags so staff know what to verify.
 export function mapVisionToProduct(v: VisionResult, scannedBarcode?: string): ProductData {
+  const dims = [v.heightInches, v.lengthInches, v.depthInches];
+  const hasDims = dims.every((n) => typeof n === "number" && n > 0);
+
+  // Dimensions are never printed, so always an estimate. Weight is an estimate
+  // unless a printed net weight drove it.
   const estimatedFields: string[] = ["description", "category", "seoTitle", "seoDescription"];
-  if (!v.weightFromPackage && v.weight) estimatedFields.push("weight");
-  if (!v.priceFromLabel && v.averagePrice) estimatedFields.push("averagePrice");
+  if (hasDims) estimatedFields.push("dimensions");
+  if (v.weightLbs > 0 && !v.weightFromPackage) estimatedFields.push("weight");
+  if (v.averagePrice && !v.priceFromLabel) estimatedFields.push("averagePrice");
 
   return {
     barcode: scannedBarcode || v.barcode || "",
@@ -31,8 +39,10 @@ export function mapVisionToProduct(v: VisionResult, scannedBarcode?: string): Pr
     description: v.description ?? "",
     brand: v.brand ?? "",
     category: v.category ?? "",
-    weight: v.weight ?? "",
-    dimensions: v.dimensions ?? "",
+    weight: v.weightLbs > 0 ? `${v.weightLbs.toFixed(2)} lb` : "",
+    dimensions: hasDims
+      ? `${v.heightInches} x ${v.lengthInches} x ${v.depthInches} in`
+      : "",
     images: [],
     averagePrice: v.averagePrice ?? "",
     seoTitle: v.seoTitle ?? "",
