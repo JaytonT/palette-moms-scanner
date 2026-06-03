@@ -72,6 +72,28 @@ async function decodeImageFile(file: File): Promise<string | null> {
   }
 }
 
+// Decode a single frozen frame (the live "Capture" button). A still beats the
+// live loop on a phone that won't continuously autofocus: the user taps when the
+// barcode looks sharp, and we decode that one full-resolution frame. Native
+// detector first (fast), ZXing as the guaranteed fallback.
+async function decodeCanvas(canvas: HTMLCanvasElement): Promise<string | null> {
+  const native = getNativeDetector();
+  if (native) {
+    try {
+      const found = await native.detect(canvas);
+      if (found && found.length > 0) return found[0].rawValue;
+    } catch {
+      // fall through to ZXing
+    }
+  }
+  try {
+    const result = await makeZxingReader().decodeFromImageUrl(canvas.toDataURL("image/png"));
+    return result.getText();
+  } catch {
+    return null;
+  }
+}
+
 const CAMERA_CONSTRAINTS: MediaStreamConstraints = {
   video: {
     facingMode: { ideal: "environment" },
@@ -187,6 +209,39 @@ export const BarcodeScanner = ({ onScanSuccess, isScanning, onClose }: BarcodeSc
     }
   };
 
+  // Manual shutter: freeze the current preview frame and decode it. Center-crop
+  // to the reticle region so the barcode gets maximum pixel density and the
+  // decoder isn't distracted by background clutter.
+  const handleCapture = async () => {
+    const video = videoRef.current;
+    if (!video || video.videoWidth === 0 || doneRef.current) return;
+    setIsDecodingPhoto(true);
+    try {
+      const vw = video.videoWidth;
+      const vh = video.videoHeight;
+      const cropW = Math.round(vw * 0.9);
+      const cropH = Math.round(vh * 0.5);
+      const sx = Math.round((vw - cropW) / 2);
+      const sy = Math.round((vh - cropH) / 2);
+      const canvas = document.createElement("canvas");
+      canvas.width = cropW;
+      canvas.height = cropH;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return;
+      ctx.drawImage(video, sx, sy, cropW, cropH, 0, 0, cropW, cropH);
+      const code = await decodeCanvas(canvas);
+      if (code) {
+        handleHit(code); // stops the camera
+      } else {
+        toast.error("No barcode in that frame", {
+          description: "Center the barcode in the box, hold steady, tap Capture again.",
+        });
+      }
+    } finally {
+      setIsDecodingPhoto(false);
+    }
+  };
+
   const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     e.target.value = ""; // allow re-picking the same file
@@ -262,10 +317,21 @@ export const BarcodeScanner = ({ onScanSuccess, isScanning, onClose }: BarcodeSc
           </div>
 
           <p className="text-center text-sm text-muted-foreground">
-            Hold the barcode flat inside the box. Wide barcodes scan best filling the frame.
+            Center the barcode in the box. It scans on its own, or tap Capture when it looks sharp.
           </p>
 
           <div className="space-y-3">
+            <Button
+              variant="default"
+              size="lg"
+              onClick={handleCapture}
+              className="w-full"
+              disabled={!isCameraReady || isDecodingPhoto}
+            >
+              <Camera className="mr-2 h-5 w-5" />
+              Capture & Scan
+            </Button>
+
             <Button
               variant="outline"
               size="lg"
