@@ -140,38 +140,43 @@ export const BarcodeScanner = ({ onScanSuccess, isScanning, onClose }: BarcodeSc
     const native = getNativeDetector();
 
     try {
+      // One owned stream for the whole scan. ZXing decodes from it as the
+      // reliable baseline on every device (it passes the 1D decode test suite).
+      // Native BarcodeDetector, when present, runs alongside purely for speed.
+      // It is NEVER trusted alone: many Android Chrome builds expose
+      // BarcodeDetector while detect() always returns [] (the platform barcode
+      // module is not provisioned), which silently made the scanner never read.
+      const stream = await navigator.mediaDevices.getUserMedia(CAMERA_CONSTRAINTS);
+      streamRef.current = stream;
+      const controls = await makeZxingReader().decodeFromStream(stream, video, (result) => {
+        if (result) handleHit(result.getText());
+      });
+      controlsRef.current = controls;
+      setIsCameraReady(true);
+
       if (native) {
-        // Native path: own the stream, run a detect loop over the <video>.
-        const stream = await navigator.mediaDevices.getUserMedia(CAMERA_CONSTRAINTS);
-        streamRef.current = stream;
-        video.srcObject = stream;
-        await video.play();
-        setIsCameraReady(true);
+        // Race the native detector for speed. First engine to hit wins;
+        // handleHit is idempotent via doneRef, so a double hit is harmless.
+        let loggedErr = false;
         const loop = async () => {
           if (!streamRef.current || doneRef.current) return;
-          try {
-            const codes = await native.detect(video);
-            if (codes && codes.length > 0) {
-              handleHit(codes[0].rawValue);
-              return;
+          if (video.videoWidth > 0) {
+            try {
+              const codes = await native.detect(video);
+              if (codes && codes.length > 0) {
+                handleHit(codes[0].rawValue);
+                return;
+              }
+            } catch (e) {
+              if (!loggedErr) {
+                loggedErr = true;
+                console.warn("Native BarcodeDetector failed; ZXing is carrying the scan:", e);
+              }
             }
-          } catch {
-            /* transient detect errors are expected, keep looping */
           }
           rafRef.current = requestAnimationFrame(loop);
         };
         rafRef.current = requestAnimationFrame(loop);
-      } else {
-        // ZXing path (iOS Safari and anything without BarcodeDetector).
-        const controls = await makeZxingReader().decodeFromConstraints(
-          CAMERA_CONSTRAINTS,
-          video,
-          (result) => {
-            if (result) handleHit(result.getText());
-          }
-        );
-        controlsRef.current = controls;
-        setIsCameraReady(true);
       }
     } catch (err) {
       console.error("Error starting scanner:", err);
