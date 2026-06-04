@@ -131,7 +131,11 @@ export const BarcodeScanner = ({ onScanSuccess, isScanning, onClose }: BarcodeSc
       streamRef.current.getTracks().forEach((t) => t.stop());
       streamRef.current = null;
     }
-    if (videoRef.current) videoRef.current.srcObject = null;
+    if (videoRef.current) {
+      videoRef.current.onloadedmetadata = null;
+      videoRef.current.onplaying = null;
+      videoRef.current.srcObject = null;
+    }
     setIsCameraReady(false);
   };
 
@@ -162,19 +166,32 @@ export const BarcodeScanner = ({ onScanSuccess, isScanning, onClose }: BarcodeSc
     const native = getNativeDetector();
 
     try {
-      // One owned stream for the whole scan. ZXing decodes from it as the
-      // reliable baseline on every device (it passes the 1D decode test suite).
-      // Native BarcodeDetector, when present, runs alongside purely for speed.
-      // It is NEVER trusted alone: many Android Chrome builds expose
-      // BarcodeDetector while detect() always returns [] (the platform barcode
-      // module is not provisioned), which silently made the scanner never read.
       const stream = await navigator.mediaDevices.getUserMedia(CAMERA_CONSTRAINTS);
       streamRef.current = stream;
-      const controls = await makeZxingReader().decodeFromStream(stream, video, (result) => {
-        if (result) handleHit(result.getText());
-      });
-      controlsRef.current = controls;
-      setIsCameraReady(true);
+
+      // Reveal the live feed the moment frames arrive. This is deliberately NOT
+      // gated on decoder startup: on a cold camera the decoder attach can hang,
+      // and gating display behind it left the preview black until the app was
+      // backgrounded and refocused. Drive readiness off the video's own events.
+      const markReady = () => {
+        if (!doneRef.current) setIsCameraReady(true);
+      };
+      video.onloadedmetadata = () => void video.play().then(markReady).catch(() => {});
+      video.onplaying = markReady;
+      video.srcObject = stream;
+      void video.play().then(markReady).catch(() => {});
+
+      // ZXing reads the already-playing element as the reliable baseline on every
+      // device (it passes the 1D decode test suite). Fire-and-forget on purpose:
+      // its startup must never block the preview from showing.
+      makeZxingReader()
+        .decodeFromVideoElement(video, (result) => {
+          if (result) handleHit(result.getText());
+        })
+        .then((controls) => {
+          controlsRef.current = controls;
+        })
+        .catch((e) => console.warn("ZXing live decode failed to start:", e));
 
       if (native) {
         // Race the native detector for speed. First engine to hit wins;
