@@ -6,7 +6,10 @@
 // Vercel exposes the project's env vars (including VITE_-prefixed ones) to the
 // function runtime via process.env, so no new variables are needed.
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { runBarcodePipeline } from "./_lib/lookup-pipeline";
+// .js extension is required: package.json is "type": "module", so the compiled
+// function runs as ESM and Node's loader needs the explicit extension. Without
+// it the deploy 500s with ERR_MODULE_NOT_FOUND even though the file is present.
+import { runBarcodePipeline } from "./_lib/lookup-pipeline.js";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   const barcode =
