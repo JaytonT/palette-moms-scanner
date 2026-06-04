@@ -120,7 +120,8 @@ export function Scanner() {
         ref={photoInputRef}
         type="file"
         accept="image/*"
-        aria-label="Take or upload a product photo"
+        capture="environment"
+        aria-label="Take a photo of the product"
         className="hidden"
         onChange={handleIdentifyPhoto}
       />
