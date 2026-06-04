@@ -4,10 +4,13 @@
 // silently fails (every fetch lands in a catch -> empty form). On the server
 // there is no CORS, and the same calls return full product data.
 //
-// Relative imports only (no "@/" alias) so the @vercel/node build can resolve
-// this from api/lookup.ts. Env is injected by the caller rather than read from
-// import.meta so this module works in the function runtime and in tests.
-import type { ProductData } from "../types/product";
+// Lives under api/_lib (the "_" prefix keeps it from being a route) so the
+// @vercel/node bundler traces it into the function at build time. A sibling
+// src/ import would not be bundled and fails at runtime with ERR_MODULE_NOT_FOUND.
+// The ProductData import is type-only (erased at runtime), so its path only has
+// to resolve for typecheck, never for module loading. Env is injected by the
+// caller (process.env server-side, a literal in tests) instead of import.meta.
+import type { ProductData } from "../../src/types/product";
 
 export interface LookupEnv {
   webhookUrl: string;

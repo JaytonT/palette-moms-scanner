@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { runBarcodePipeline } from "@/lib/lookup-pipeline";
+import { runBarcodePipeline } from "../../api/_lib/lookup-pipeline";
 import { lookupBarcode } from "@/lib/barcode-lookup";
 
 // Pipeline env (server-side these come from process.env; injected here directly).

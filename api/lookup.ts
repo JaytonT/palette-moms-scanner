@@ -6,7 +6,7 @@
 // Vercel exposes the project's env vars (including VITE_-prefixed ones) to the
 // function runtime via process.env, so no new variables are needed.
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { runBarcodePipeline } from "../src/lib/lookup-pipeline";
+import { runBarcodePipeline } from "./_lib/lookup-pipeline";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   const barcode =
