@@ -39,6 +39,9 @@ export function Scanner() {
   const [product, setProduct] = useState<ProductData | null>(null);
   const [manualBarcode, setManualBarcode] = useState("");
   const [isScanning, setIsScanning] = useState(false);
+  // Set when a scan/lookup found no product in any database. Drives the
+  // photo-AI fallback screen and carries the barcode onto the identified item.
+  const [notFoundBarcode, setNotFoundBarcode] = useState<string | null>(null);
   const photoInputRef = useRef<HTMLInputElement>(null);
 
   const handleLookup = async (barcode: string) => {
@@ -46,7 +49,13 @@ export function Scanner() {
     setLoading(true);
     try {
       const data = await lookupBarcode(barcode.trim());
-      setProduct(data);
+      // No title means no database had this product. Don't dump the user into
+      // an empty form — route to the photo-AI fallback, keeping the barcode.
+      if (!data.title?.trim()) {
+        setNotFoundBarcode(barcode.trim());
+      } else {
+        setProduct(data);
+      }
     } catch {
       toast.error("Lookup failed", {
         description: "Could not fetch product info. Try a photo or manual entry.",
@@ -63,7 +72,10 @@ export function Scanner() {
     setLoadingLabel("Reading the package...");
     setLoading(true);
     try {
-      const data = await identifyProductFromImage(file);
+      // Pass the scanned barcode (if this came from the not-found fallback) so
+      // the identified product keeps its barcode.
+      const data = await identifyProductFromImage(file, notFoundBarcode ?? undefined);
+      setNotFoundBarcode(null);
       setProduct(data);
     } catch (err) {
       toast.error("Could not identify product", {
@@ -75,12 +87,16 @@ export function Scanner() {
   };
 
   const handleManualEntry = () => {
-    setProduct(ManualEntry());
+    // Carry the scanned barcode into a manual entry if we came from not-found.
+    const base = ManualEntry();
+    setProduct(notFoundBarcode ? { ...base, barcode: notFoundBarcode } : base);
+    setNotFoundBarcode(null);
   };
 
   const reset = () => {
     setProduct(null);
     setManualBarcode("");
+    setNotFoundBarcode(null);
   };
 
   if (product) {
@@ -96,6 +112,17 @@ export function Scanner() {
           handleLookup(barcode);
         }}
         onClose={() => setIsScanning(false)}
+      />
+
+      {/* One hidden photo input, shared by the main "Identify by Photo" button
+          and the not-found fallback. Always mounted so either path can open it. */}
+      <input
+        ref={photoInputRef}
+        type="file"
+        accept="image/*"
+        aria-label="Take or upload a product photo"
+        className="hidden"
+        onChange={handleIdentifyPhoto}
       />
 
       <div className="p-6 max-w-lg mx-auto space-y-6">
@@ -114,6 +141,37 @@ export function Scanner() {
               <span className="text-muted-foreground">{loadingLabel}</span>
             </CardContent>
           </Card>
+        ) : notFoundBarcode ? (
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Not found in any database</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <p className="text-sm text-muted-foreground">
+                Barcode <span className="font-medium">{notFoundBarcode}</span> isn't in
+                the product databases. Snap a photo of the package and AI will fill in
+                the details.
+              </p>
+              <Button
+                size="lg"
+                className="w-full h-14 text-base gap-3"
+                onClick={() => photoInputRef.current?.click()}
+              >
+                <Sparkles className="h-5 w-5" />
+                Take Photo to Auto-Fill
+              </Button>
+              <Button variant="outline" className="w-full" onClick={handleManualEntry}>
+                Enter details manually
+              </Button>
+              <Button
+                variant="ghost"
+                className="w-full"
+                onClick={() => setNotFoundBarcode(null)}
+              >
+                Back
+              </Button>
+            </CardContent>
+          </Card>
         ) : (
           <>
             <Button
@@ -124,14 +182,6 @@ export function Scanner() {
               <Sparkles className="h-6 w-6" />
               Identify by Photo
             </Button>
-            <input
-              ref={photoInputRef}
-              type="file"
-              accept="image/*"
-              aria-label="Take or upload a product photo"
-              className="hidden"
-              onChange={handleIdentifyPhoto}
-            />
             <p className="text-center text-xs text-muted-foreground -mt-2">
               Snap the front of the package. Best for items not in barcode databases.
             </p>
