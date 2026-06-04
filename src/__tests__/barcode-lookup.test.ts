@@ -1,5 +1,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { runBarcodePipeline } from "@/lib/lookup-pipeline";
 import { lookupBarcode } from "@/lib/barcode-lookup";
+
+// Pipeline env (server-side these come from process.env; injected here directly).
+const ENV = {
+  webhookUrl: "https://n8n.test/webhook/barcode",
+  googleApiKey: "test-google-key",
+  googleCseId: "test-cse-id",
+};
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -107,19 +115,15 @@ function mockFetch(
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
-describe("lookupBarcode", () => {
+describe("runBarcodePipeline", () => {
   let originalFetch: typeof fetch;
 
   beforeEach(() => {
     originalFetch = globalThis.fetch;
-    vi.stubEnv("VITE_N8N_BARCODE_WEBHOOK", "https://n8n.test/webhook/barcode");
-    vi.stubEnv("VITE_GOOGLE_SEARCH_API_KEY", "test-google-key");
-    vi.stubEnv("VITE_GOOGLE_CSE_ID", "test-cse-id");
   });
 
   afterEach(() => {
     globalThis.fetch = originalFetch;
-    vi.unstubAllEnvs();
     vi.restoreAllMocks();
   });
 
@@ -150,7 +154,7 @@ describe("lookupBarcode", () => {
       },
     ]);
 
-    const result = await lookupBarcode("012345678901");
+    const result = await runBarcodePipeline("012345678901", ENV);
 
     expect(result.barcode).toBe("012345678901");
     expect(result.title).toBeTruthy();
@@ -188,7 +192,7 @@ describe("lookupBarcode", () => {
       },
     ]);
 
-    const result = await lookupBarcode("000000000000");
+    const result = await runBarcodePipeline("000000000000", ENV);
 
     expect(result.dataSource).toBe("ai");
     expect(result.confidence).toBe("low");
@@ -206,7 +210,7 @@ describe("lookupBarcode", () => {
       { match: (u) => u.includes("n8n.test"), response: {}, ok: false },
     ]);
 
-    const result = await lookupBarcode("000000000000");
+    const result = await runBarcodePipeline("000000000000", ENV);
 
     expect(result.dataSource).toBe("manual");
     expect(result.confidence).toBe("low");
@@ -229,7 +233,7 @@ describe("lookupBarcode", () => {
       },
     ]);
 
-    const result = await lookupBarcode("012345678901");
+    const result = await runBarcodePipeline("012345678901", ENV);
     expect(result.confidence).toBe("high");
   });
 
@@ -258,7 +262,7 @@ describe("lookupBarcode", () => {
       { match: (u) => u.includes("n8n.test"), response: cannotIdentify },
     ]);
 
-    const result = await lookupBarcode("999999999999");
+    const result = await runBarcodePipeline("999999999999", ENV);
     expect(result.confidence).toBe("low");
     expect(result.title).toBe("");
   });
@@ -310,7 +314,7 @@ describe("lookupBarcode", () => {
     ]);
     globalThis.fetch = fetchMock;
 
-    const result = await lookupBarcode("111111111111");
+    const result = await runBarcodePipeline("111111111111", ENV);
 
     // Google images should have been called
     const googleCall = (fetchMock as ReturnType<typeof vi.fn>).mock.calls.find(
@@ -354,11 +358,50 @@ describe("lookupBarcode", () => {
       },
     ]);
 
-    const result = await lookupBarcode("012345678901");
+    const result = await runBarcodePipeline("012345678901", ENV);
 
     expect(result.title).toBe("CLAUDE OVERRIDE TITLE");
     expect(result.brand).toBe("Claude Brand");
     expect(result.category).toBe("Claude Category");
     expect(result.seoTitle).toBe("SEO title by Claude");
+  });
+});
+
+describe("lookupBarcode (client)", () => {
+  let originalFetch: typeof fetch;
+
+  beforeEach(() => {
+    originalFetch = globalThis.fetch;
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    vi.restoreAllMocks();
+  });
+
+  it("calls /api/lookup with the barcode and returns the product", async () => {
+    const product = {
+      barcode: "012345678901",
+      title: "Server Product",
+      dataSource: "api",
+      confidence: "high",
+    };
+    const f = vi.fn((_url: string) =>
+      Promise.resolve({ ok: true, json: () => Promise.resolve(product) })
+    );
+    globalThis.fetch = f as unknown as typeof fetch;
+
+    const result = await lookupBarcode("012345678901");
+
+    expect(f.mock.calls[0][0]).toContain("/api/lookup?barcode=012345678901");
+    expect(result.title).toBe("Server Product");
+  });
+
+  it("throws when the lookup endpoint errors", async () => {
+    globalThis.fetch = vi.fn(() =>
+      Promise.resolve({ ok: false, status: 502 })
+    ) as unknown as typeof fetch;
+
+    await expect(lookupBarcode("012345678901")).rejects.toThrow();
   });
 });
