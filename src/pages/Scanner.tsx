@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import { toast } from "sonner";
 import { lookupBarcode } from "@/lib/barcode-lookup";
 import { identifyProductFromImage } from "@/lib/identify-product";
+import { uploadImage } from "@/lib/ghl";
 import { ProductForm } from "@/components/ProductForm";
 import { BarcodeScanner } from "@/components/BarcodeScanner";
 import type { ProductData } from "@/types/product";
@@ -72,11 +73,18 @@ export function Scanner() {
     setLoadingLabel("Reading the package...");
     setLoading(true);
     try {
-      // Pass the scanned barcode (if this came from the not-found fallback) so
-      // the identified product keeps its barcode.
-      const data = await identifyProductFromImage(file, notFoundBarcode ?? undefined);
+      // Identify the product from the photo AND upload that same photo to GHL so
+      // it becomes the product image. Run together; a failed upload must not
+      // block identification. Pass the scanned barcode (from the not-found
+      // fallback) so the identified product keeps its barcode.
+      const [data, imageUrl] = await Promise.all([
+        identifyProductFromImage(file, notFoundBarcode ?? undefined),
+        uploadImage(file).catch(() => null),
+      ]);
       setNotFoundBarcode(null);
-      setProduct(data);
+      setProduct(
+        imageUrl ? { ...data, images: [imageUrl, ...data.images] } : data
+      );
     } catch (err) {
       toast.error("Could not identify product", {
         description: err instanceof Error ? err.message : "Try again or use manual entry.",

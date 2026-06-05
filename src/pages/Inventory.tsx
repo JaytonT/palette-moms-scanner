@@ -5,7 +5,7 @@ import type { GHLProduct } from "@/types/product";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { setProductFeatured } from "@/lib/ghl";
+import { setProductFeatured, getProductQuantity } from "@/lib/ghl";
 
 const GHL_BASE = "https://services.leadconnectorhq.com";
 const GHL_API_KEY = import.meta.env.VITE_GHL_API_KEY as string;
@@ -46,6 +46,7 @@ async function activateProduct(productId: string): Promise<void> {
 
 interface ProductCardProps {
   product: GHLProduct;
+  quantity: number;
   needsReview: boolean;
   onActivate?: (id: string) => void;
   onToggleFeatured?: (id: string, current: boolean) => void;
@@ -53,15 +54,14 @@ interface ProductCardProps {
 
 function ProductCard({
   product,
+  quantity,
   needsReview,
   onActivate,
   onToggleFeatured,
 }: ProductCardProps) {
-  const qty =
-    product.variants?.reduce(
-      (sum, v) => sum + (v.availableQuantity ?? 0),
-      0
-    ) ?? 0;
+  // Quantity comes from the product's prices (fetched by the parent), not from
+  // variants — GHL keeps availableQuantity on the price object.
+  const qty = quantity;
 
   const firstImage = product.medias?.[0]?.url;
 
@@ -140,6 +140,7 @@ function ProductCard({
 
 export function Inventory() {
   const [products, setProducts] = useState<GHLProduct[]>([]);
+  const [qtys, setQtys] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -147,6 +148,14 @@ export function Inventory() {
     try {
       const all = await fetchAllProducts();
       setProducts(all);
+      // Quantity lives on each product's price; fetch them in parallel.
+      const entries = await Promise.all(
+        all.map(
+          async (p) =>
+            [p._id, await getProductQuantity(p._id).catch(() => 0)] as const
+        )
+      );
+      setQtys(Object.fromEntries(entries));
     } catch {
       setError("Could not load products from GHL.");
     } finally {
@@ -238,6 +247,7 @@ export function Inventory() {
               <ProductCard
                 key={p._id}
                 product={p}
+                quantity={qtys[p._id] ?? 0}
                 needsReview
                 onActivate={handleActivate}
                 onToggleFeatured={handleToggleFeatured}
@@ -263,6 +273,7 @@ export function Inventory() {
               <ProductCard
                 key={p._id}
                 product={p}
+                quantity={qtys[p._id] ?? 0}
                 needsReview={false}
                 onToggleFeatured={handleToggleFeatured}
               />

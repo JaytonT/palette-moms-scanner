@@ -46,6 +46,22 @@ export async function findProductByBarcode(
   return { found: true, product: match, currentQuantity };
 }
 
+/**
+ * Sum availableQuantity across a product's prices. Quantity lives on the PRICE
+ * object in GHL, not the product, and the list endpoint does not expand prices,
+ * so each product must be queried individually.
+ */
+export async function getProductQuantity(productId: string): Promise<number> {
+  const res = await fetch(
+    `${GHL_BASE}/products/${productId}/price?locationId=${GHL_LOCATION_ID}`,
+    { headers: ghlHeaders() }
+  );
+  if (!res.ok) return 0;
+  const data = await res.json();
+  const prices: Array<{ availableQuantity?: number }> = data.prices ?? [];
+  return prices.reduce((sum, p) => sum + (p.availableQuantity ?? 0), 0);
+}
+
 // Turn the human "0.23 lb" / "8.5 x 2 x 2 in" strings into GHL price
 // shippingOptions. Returns undefined when nothing is parseable so we never send
 // an empty/invalid block (verified shapes: weight unit "lb", dims unit "in").
