@@ -121,4 +121,35 @@ describe("ghl client (server-routed)", () => {
     globalThis.fetch = mockFetch({ error: "boom" }, false, 502);
     await expect(createProduct(SAMPLE_PRODUCT)).rejects.toThrow("boom");
   });
+
+  it("on 401 prompts for passphrase, logs in, and retries once", async () => {
+    const prompt = vi.fn(() => "secret-pass");
+    vi.stubGlobal("prompt", prompt);
+    let ghlCalls = 0;
+    const f = vi.fn((url: string) => {
+      if (url === "/api/login") {
+        return Promise.resolve({
+          ok: true, status: 200,
+          json: () => Promise.resolve({ ok: true }),
+          text: () => Promise.resolve("{}"),
+        });
+      }
+      ghlCalls += 1;
+      const unauthorized = ghlCalls === 1;
+      const body = unauthorized ? { error: "unauthorized" } : { productId: "p1" };
+      return Promise.resolve({
+        ok: !unauthorized, status: unauthorized ? 401 : 200,
+        json: () => Promise.resolve(body),
+        text: () => Promise.resolve(JSON.stringify(body)),
+      });
+    }) as unknown as typeof fetch;
+    globalThis.fetch = f;
+
+    const id = await createProduct(SAMPLE_PRODUCT);
+    expect(id).toBe("p1");
+    const urls = (f as unknown as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0]);
+    expect(urls).toEqual(["/api/ghl", "/api/login", "/api/ghl"]);
+    expect(prompt).toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
 });

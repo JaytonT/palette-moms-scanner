@@ -5,12 +5,38 @@ import { fileToDownscaledBase64 } from "@/lib/identify-product";
 // GHL token lives only in the function runtime and never ships in the browser
 // bundle. This module just calls those endpoints.
 
-async function ghlAction<T>(action: string, payload: Record<string, unknown>): Promise<T> {
-  const res = await fetch("/api/ghl", {
+// Prompt for the staff passphrase and exchange it for a session cookie. Returns
+// true if a session was established. The passphrase never persists in the bundle
+// or storage; the HttpOnly cookie set by /api/login carries the session.
+async function login(): Promise<boolean> {
+  const passphrase = window.prompt("Enter the staff passphrase to continue:");
+  if (passphrase == null) return false;
+  const res = await fetch("/api/login", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ action, ...payload }),
+    body: JSON.stringify({ passphrase }),
   });
+  return res.ok;
+}
+
+// POST JSON; on a 401 (auth enforced, no session), prompt for the passphrase and
+// retry once. Server endpoints are no-ops on auth when unconfigured, so this path
+// only triggers once the env vars are set.
+async function apiPost(url: string, body: unknown): Promise<Response> {
+  const opts: RequestInit = {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  };
+  let res = await fetch(url, opts);
+  if (res.status === 401 && (await login())) {
+    res = await fetch(url, opts);
+  }
+  return res;
+}
+
+async function ghlAction<T>(action: string, payload: Record<string, unknown>): Promise<T> {
+  const res = await apiPost("/api/ghl", { action, ...payload });
   if (!res.ok) {
     const e = (await res.json().catch(() => ({}))) as { error?: string };
     throw new Error(e.error || `GHL ${action} failed (${res.status})`);
@@ -81,14 +107,10 @@ export async function activateProduct(productId: string): Promise<void> {
  */
 export async function uploadImage(file: File): Promise<{ id: string; url: string }> {
   const { data, mediaType } = await fileToDownscaledBase64(file);
-  const res = await fetch("/api/media", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      imageBase64: data,
-      mediaType,
-      name: file.name || "photo.jpg",
-    }),
+  const res = await apiPost("/api/media", {
+    imageBase64: data,
+    mediaType,
+    name: file.name || "photo.jpg",
   });
   if (!res.ok) {
     const e = (await res.json().catch(() => ({}))) as { error?: string };

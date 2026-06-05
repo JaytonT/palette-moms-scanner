@@ -3,12 +3,14 @@
 // The browser downscales before sending, keeping the JSON body small.
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { uploadBase64 } from "./_lib/ghl-server.js";
+import { requireSession } from "./_lib/auth.js";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== "POST") {
     res.status(405).json({ error: "POST only" });
     return;
   }
+  if (!requireSession(req, res)) return;
   const body =
     (typeof req.body === "string" ? safeParse(req.body) : req.body) ?? {};
   const { imageBase64, mediaType, name } = body as {
