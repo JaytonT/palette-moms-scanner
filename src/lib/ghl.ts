@@ -65,7 +65,10 @@ export async function createProduct(
     description: data.description,
     statementDescriptor: data.barcode,
     isFeatured: data.isFeatured,
-    locationIds: [GHL_LOCATION_ID],
+    // GHL V2 wants a single locationId STRING (not a locationIds array) plus a
+    // productType, else it 422s with "locationId/altId must be a string".
+    locationId: GHL_LOCATION_ID,
+    productType: "PHYSICAL",
     availableInStore,
     medias: data.images.slice(0, 4).map((url, i) => ({
       url,
