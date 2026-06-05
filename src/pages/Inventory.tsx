@@ -5,11 +5,10 @@ import type { GHLProduct } from "@/types/product";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { setProductFeatured, getProductQuantity } from "@/lib/ghl";
+import { setProductFeatured } from "@/lib/ghl";
 
 const GHL_BASE = "https://services.leadconnectorhq.com";
 const GHL_API_KEY = import.meta.env.VITE_GHL_API_KEY as string;
-const GHL_LOCATION_ID = import.meta.env.VITE_GHL_LOCATION_ID as string;
 
 function ghlHeaders(): HeadersInit {
   return {
@@ -17,17 +16,6 @@ function ghlHeaders(): HeadersInit {
     "Content-Type": "application/json",
     Version: "2021-07-28",
   };
-}
-
-async function fetchAllProducts(): Promise<GHLProduct[]> {
-  // Use /products/ endpoint (not /products/inventory) as it returns availableInStore
-  const res = await fetch(
-    `${GHL_BASE}/products/?locationId=${GHL_LOCATION_ID}&limit=100`,
-    { headers: ghlHeaders() }
-  );
-  if (!res.ok) throw new Error(`${res.status}`);
-  const data = await res.json();
-  return (data.products ?? []) as GHLProduct[];
 }
 
 async function activateProduct(productId: string): Promise<void> {
@@ -146,16 +134,16 @@ export function Inventory() {
 
   const load = async () => {
     try {
-      const all = await fetchAllProducts();
-      setProducts(all);
-      // Quantity lives on each product's price; fetch them in parallel.
-      const entries = await Promise.all(
-        all.map(
-          async (p) =>
-            [p._id, await getProductQuantity(p._id).catch(() => 0)] as const
-        )
-      );
-      setQtys(Object.fromEntries(entries));
+      // Single server call returns products + quantities, rate-limit-safe and
+      // briefly cached, so the browser never bursts GHL with per-product calls.
+      const res = await fetch("/api/inventory");
+      if (!res.ok) throw new Error(String(res.status));
+      const data = await res.json();
+      const items = (data.products ?? []) as Array<
+        GHLProduct & { quantity?: number }
+      >;
+      setProducts(items);
+      setQtys(Object.fromEntries(items.map((p) => [p._id, p.quantity ?? 0])));
     } catch {
       setError("Could not load products from GHL.");
     } finally {
