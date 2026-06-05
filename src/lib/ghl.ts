@@ -46,27 +46,62 @@ export async function findProductByBarcode(
   return { found: true, product: match, currentQuantity };
 }
 
+// Turn the human "0.23 lb" / "8.5 x 2 x 2 in" strings into GHL price
+// shippingOptions. Returns undefined when nothing is parseable so we never send
+// an empty/invalid block (verified shapes: weight unit "lb", dims unit "in").
+function buildShippingOptions(data: ProductData):
+  | {
+      weight?: { value: number; unit: string };
+      dimensions?: { length: number; width: number; height: number; unit: string };
+    }
+  | undefined {
+  const out: {
+    weight?: { value: number; unit: string };
+    dimensions?: { length: number; width: number; height: number; unit: string };
+  } = {};
+
+  const w = data.weight.match(/([\d.]+)\s*(lb|lbs|kg|oz|g)?/i);
+  if (w && parseFloat(w[1]) > 0) {
+    out.weight = {
+      value: parseFloat(w[1]),
+      unit: (w[2] || "lb").toLowerCase().replace(/^lbs$/, "lb"),
+    };
+  }
+
+  const d = data.dimensions.match(/([\d.]+)\s*x\s*([\d.]+)\s*x\s*([\d.]+)\s*(in|cm)?/i);
+  if (d) {
+    out.dimensions = {
+      length: parseFloat(d[1]),
+      width: parseFloat(d[2]),
+      height: parseFloat(d[3]),
+      unit: (d[4] || "in").toLowerCase(),
+    };
+  }
+
+  return out.weight || out.dimensions ? out : undefined;
+}
+
 /**
- * Create a new product in GHL.
- * @param data - ProductData to create
- * @param availableInStore - Whether the product is visible on storefront (default true).
- *   Pass false for low-confidence products that need mom review before going live.
+ * Create a new product in GHL, then attach its price.
+ *
+ * GHL models a simple item as a product (NO variants — variants are attribute
+ * groups like Size/Color and require id + options) plus a separate one-time
+ * price that carries SKU, quantity and shipping. `amount` is in DOLLARS, not
+ * cents ($3.99 = 3.99). Verified against the live API.
+ *
+ * @param availableInStore - storefront visibility (default true). Pass false for
+ *   low-confidence items that need review before going live.
  */
 export async function createProduct(
   data: ProductData,
   availableInStore = true
 ): Promise<string> {
-  const priceInCents = Math.round(
-    parseFloat(data.averagePrice.replace(/[^0-9.]/g, "")) * 100
-  );
-
-  const payload = {
+  // 1) Create the product shell.
+  const productPayload = {
     name: data.title,
     description: data.description,
     statementDescriptor: data.barcode,
     isFeatured: data.isFeatured,
-    // GHL V2 wants a single locationId STRING (not a locationIds array) plus a
-    // productType, else it 422s with "locationId/altId must be a string".
     locationId: GHL_LOCATION_ID,
     productType: "PHYSICAL",
     availableInStore,
@@ -76,14 +111,6 @@ export async function createProduct(
       type: "image",
       isFeatured: i === 0,
     })),
-    variants: [
-      {
-        name: "Default",
-        sku: data.skuCode || data.barcode,
-        price: isNaN(priceInCents) ? 0 : priceInCents,
-        availableQuantity: data.quantity,
-      },
-    ],
     seoTitle: data.seoTitle,
     seoDescription: data.seoDescription,
   };
@@ -91,16 +118,44 @@ export async function createProduct(
   const res = await fetch(`${GHL_BASE}/products/`, {
     method: "POST",
     headers: ghlHeaders(),
-    body: JSON.stringify(payload),
+    body: JSON.stringify(productPayload),
   });
-
   if (!res.ok) {
     const text = await res.text();
     throw new Error(`GHL create product failed: ${res.status} ${text}`);
   }
+  const created = await res.json();
+  // GHL returns the product object at the top level (no { product } wrapper).
+  const productId = (created._id ?? created.product?._id) as string | undefined;
+  if (!productId) throw new Error("GHL create product: no id in response");
 
-  const json = await res.json();
-  return json.product._id as string;
+  // 2) Attach the price (SKU, quantity, shipping live here; amount in dollars).
+  const amount = parseFloat(data.averagePrice.replace(/[^0-9.]/g, ""));
+  const pricePayload: Record<string, unknown> = {
+    name: data.title || "Default",
+    type: "one_time",
+    currency: "USD",
+    amount: isNaN(amount) ? 0 : amount,
+    sku: data.skuCode || data.barcode,
+    availableQuantity: data.quantity,
+    trackInventory: true,
+    allowOutOfStockPurchases: false,
+    locationId: GHL_LOCATION_ID,
+  };
+  const shippingOptions = buildShippingOptions(data);
+  if (shippingOptions) pricePayload.shippingOptions = shippingOptions;
+
+  const priceRes = await fetch(`${GHL_BASE}/products/${productId}/price`, {
+    method: "POST",
+    headers: ghlHeaders(),
+    body: JSON.stringify(pricePayload),
+  });
+  if (!priceRes.ok) {
+    const text = await priceRes.text();
+    throw new Error(`GHL create price failed: ${priceRes.status} ${text}`);
+  }
+
+  return productId;
 }
 
 export async function updateProductQuantity(

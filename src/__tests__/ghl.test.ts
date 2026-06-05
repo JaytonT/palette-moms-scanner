@@ -131,6 +131,26 @@ describe("createProduct", () => {
     expect(body.availableInStore).toBe(true);
   });
 
+  it("posts a separate price in dollars with sku, quantity and shipping", async () => {
+    const fetchMock = makeFetch({ _id: "new_prod_id" });
+    globalThis.fetch = fetchMock;
+
+    await createProduct(SAMPLE_PRODUCT);
+
+    const calls = (fetchMock as ReturnType<typeof vi.fn>).mock.calls;
+    // call 0 = product create, call 1 = price
+    const [priceUrl, priceOpts] = calls[1];
+    expect(priceUrl).toBe(`${BASE}/products/new_prod_id/price`);
+    expect(priceOpts.method).toBe("POST");
+
+    const body = JSON.parse(priceOpts.body as string);
+    expect(body.amount).toBe(9.99); // DOLLARS, not cents
+    expect(body.availableQuantity).toBe(5);
+    expect(body.sku).toBe("TST-001");
+    expect(body.type).toBe("one_time");
+    expect(body.shippingOptions.weight).toEqual({ value: 100, unit: "g" });
+  });
+
   it("sets availableInStore=false when passed false", async () => {
     const fetchMock = makeFetch({ product: { _id: "review_prod_id" } });
     globalThis.fetch = fetchMock;
