@@ -59,7 +59,7 @@ export function mapVisionToProduct(v: VisionResult, scannedBarcode?: string): Pr
 
 // Downscale before upload: a phone photo is multi-MB; Vercel caps the request
 // body at ~4.5MB, and ~1280px is plenty for reading a label.
-async function fileToDownscaledBase64(
+export async function fileToDownscaledBase64(
   file: File,
   maxEdge = 1280
 ): Promise<{ data: string; mediaType: string }> {

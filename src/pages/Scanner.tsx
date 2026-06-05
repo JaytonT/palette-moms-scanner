@@ -77,13 +77,13 @@ export function Scanner() {
       // it becomes the product image. Run together; a failed upload must not
       // block identification. Pass the scanned barcode (from the not-found
       // fallback) so the identified product keeps its barcode.
-      const [data, imageUrl] = await Promise.all([
+      const [data, uploaded] = await Promise.all([
         identifyProductFromImage(file, notFoundBarcode ?? undefined),
         uploadImage(file).catch(() => null),
       ]);
       setNotFoundBarcode(null);
       setProduct(
-        imageUrl ? { ...data, images: [imageUrl, ...data.images] } : data
+        uploaded ? { ...data, images: [uploaded.url, ...data.images] } : data
       );
     } catch (err) {
       toast.error("Could not identify product", {

@@ -5,30 +5,7 @@ import type { GHLProduct } from "@/types/product";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { setProductFeatured } from "@/lib/ghl";
-
-const GHL_BASE = "https://services.leadconnectorhq.com";
-const GHL_API_KEY = import.meta.env.VITE_GHL_API_KEY as string;
-
-function ghlHeaders(): HeadersInit {
-  return {
-    Authorization: `Bearer ${GHL_API_KEY}`,
-    "Content-Type": "application/json",
-    Version: "2021-07-28",
-  };
-}
-
-async function activateProduct(productId: string): Promise<void> {
-  const res = await fetch(`${GHL_BASE}/products/${productId}`, {
-    method: "PUT",
-    headers: ghlHeaders(),
-    body: JSON.stringify({ availableInStore: true }),
-  });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Activate failed: ${res.status} ${text}`);
-  }
-}
+import { setProductFeatured, activateProduct } from "@/lib/ghl";
 
 // ─── Product card ─────────────────────────────────────────────────────────────
 

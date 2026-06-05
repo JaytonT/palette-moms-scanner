@@ -5,7 +5,7 @@ import type { ProductData } from "@/types/product";
 import {
   findProductByBarcode,
   createProduct,
-  updateProductQuantity,
+  restockProduct,
   uploadImage,
 } from "@/lib/ghl";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -125,8 +125,6 @@ export function ProductForm({ product: initialProduct, onReset }: ProductFormPro
 
   // Duplicate dialog state
   const [showDuplicate, setShowDuplicate] = useState(false);
-  const [existingProductId, setExistingProductId] = useState<string | null>(null);
-  const [existingVariantId, setExistingVariantId] = useState<string | null>(null);
   const [existingQuantity, setExistingQuantity] = useState(0);
 
   const isEstimated = (field: string) =>
@@ -139,7 +137,8 @@ export function ProductForm({ product: initialProduct, onReset }: ProductFormPro
     if (!files || files.length === 0) return;
     setUploading(true);
     try {
-      const urls = await Promise.all(Array.from(files).map((f) => uploadImage(f)));
+      const uploaded = await Promise.all(Array.from(files).map((f) => uploadImage(f)));
+      const urls = uploaded.map((u) => u.url);
       setProduct((prev) => ({ ...prev, images: [...prev.images, ...urls] }));
       toast.success(`Added ${urls.length} photo${urls.length > 1 ? "s" : ""}`);
     } catch (err) {
@@ -174,10 +173,7 @@ export function ProductForm({ product: initialProduct, onReset }: ProductFormPro
       setIsDuplicateCheck(true);
       try {
         const existing = await findProductByBarcode(product.barcode);
-        if (existing && existing.product) {
-          const variant = existing.product.variants?.[0];
-          setExistingProductId(existing.product._id);
-          setExistingVariantId(variant?.id ?? null);
+        if (existing) {
           setExistingQuantity(existing.currentQuantity ?? 0);
           setIsDuplicateCheck(false);
           setShowDuplicate(true);
@@ -211,13 +207,12 @@ export function ProductForm({ product: initialProduct, onReset }: ProductFormPro
   };
 
   const handleConfirmDuplicate = async () => {
-    if (!existingProductId || !existingVariantId) return;
     setShowDuplicate(false);
     setIsSubmitting(true);
     try {
       const addedQuantity = product.quantity ?? 0;
-      const newTotal = existingQuantity + addedQuantity;
-      await updateProductQuantity(existingProductId, existingVariantId, newTotal);
+      // Quantity lives on the GHL price; restock adds to the current total.
+      const newTotal = await restockProduct(product.barcode, addedQuantity);
       setSubmission({
         mode: "updated",
         existingQuantity,

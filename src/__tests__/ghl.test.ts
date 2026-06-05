@@ -2,13 +2,15 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   findProductByBarcode,
   createProduct,
-  updateProductQuantity,
+  restockProduct,
   setProductFeatured,
-  uploadImage,
+  activateProduct,
 } from "@/lib/ghl";
 import type { ProductData } from "@/types/product";
 
-const BASE = "https://services.leadconnectorhq.com";
+// The client is now thin: every call POSTs to /api/ghl with an `action`. The
+// real GHL logic lives in api/_lib/ghl-server.ts and is verified against the
+// live API. These tests lock the request shaping + response mapping.
 
 const SAMPLE_PRODUCT: ProductData = {
   barcode: "012345678901",
@@ -30,7 +32,7 @@ const SAMPLE_PRODUCT: ProductData = {
   confidence: "high",
 };
 
-function makeFetch(response: unknown, ok = true, status = 200) {
+function mockFetch(response: unknown, ok = true, status = 200) {
   return vi.fn(() =>
     Promise.resolve({
       ok,
@@ -41,28 +43,13 @@ function makeFetch(response: unknown, ok = true, status = 200) {
   ) as unknown as typeof fetch;
 }
 
-// Route responses by URL substring (first match wins). createProduct now makes
-// media-library upload calls before the product create, so single-response mocks
-// no longer suffice.
-function routeFetch(
-  routes: Array<{ match: string; response: unknown; ok?: boolean; status?: number }>
-) {
-  return vi.fn((url: unknown) => {
-    const r =
-      routes.find((x) => String(url).includes(x.match)) ??
-      { response: {}, ok: true, status: 200 };
-    return Promise.resolve({
-      ok: r.ok ?? true,
-      status: r.status ?? 200,
-      json: () => Promise.resolve(r.response),
-      text: () => Promise.resolve(JSON.stringify(r.response)),
-    });
-  }) as unknown as typeof fetch;
+function lastBody(f: typeof fetch) {
+  const calls = (f as unknown as ReturnType<typeof vi.fn>).mock.calls;
+  return JSON.parse(calls[0][1].body as string);
 }
 
-describe("findProductByBarcode", () => {
+describe("ghl client (server-routed)", () => {
   let originalFetch: typeof fetch;
-
   beforeEach(() => {
     originalFetch = globalThis.fetch;
   });
@@ -71,245 +58,67 @@ describe("findProductByBarcode", () => {
     vi.restoreAllMocks();
   });
 
-  it("returns null when barcode is not found", async () => {
-    globalThis.fetch = makeFetch({ products: [] });
-    const result = await findProductByBarcode("999999999999");
-    expect(result).toBeNull();
-  });
-
-  it("returns product with currentQuantity when barcode matches statementDescriptor", async () => {
-    globalThis.fetch = makeFetch({
-      products: [
-        {
-          _id: "prod_abc",
-          name: "Test Product",
-          statementDescriptor: "012345678901",
-          variants: [{ id: "var_1", availableQuantity: 10 }],
-        },
-      ],
-    });
-
-    const result = await findProductByBarcode("012345678901");
-    expect(result).not.toBeNull();
-    expect(result?.product._id).toBe("prod_abc");
-    expect(result?.currentQuantity).toBe(10);
-  });
-
-  it("returns product when barcode matches variant SKU", async () => {
-    globalThis.fetch = makeFetch({
-      products: [
-        {
-          _id: "prod_xyz",
-          name: "Another Product",
-          statementDescriptor: "DIFFERENT",
-          variants: [
-            { id: "var_2", sku: "012345678901", availableQuantity: 3 },
-          ],
-        },
-      ],
-    });
-
-    const result = await findProductByBarcode("012345678901");
-    expect(result).not.toBeNull();
-    expect(result?.product._id).toBe("prod_xyz");
-    expect(result?.currentQuantity).toBe(3);
-  });
-
-  it("throws on non-ok GHL response", async () => {
-    globalThis.fetch = makeFetch({}, false, 500);
-    await expect(findProductByBarcode("123")).rejects.toThrow(
-      "GHL fetch products failed"
-    );
-  });
-});
-
-describe("createProduct", () => {
-  let originalFetch: typeof fetch;
-
-  beforeEach(() => {
-    originalFetch = globalThis.fetch;
-  });
-  afterEach(() => {
-    globalThis.fetch = originalFetch;
-    vi.restoreAllMocks();
-  });
-
-  const PRODUCT_ROUTES = [
-    { match: "upload-file", response: { fileId: "media_1", url: "https://ghl-cdn.example/m1.jpg" } },
-    { match: "/price", response: {} },
-    { match: "/products/", response: { _id: "new_prod_id" } },
-  ];
-
-  it("posts product and returns _id", async () => {
-    const fetchMock = routeFetch(PRODUCT_ROUTES);
-    globalThis.fetch = fetchMock;
-
-    const id = await createProduct(SAMPLE_PRODUCT);
-    expect(id).toBe("new_prod_id");
-
-    const calls = (fetchMock as ReturnType<typeof vi.fn>).mock.calls;
-    const createCall = calls.find(
-      ([u, o]) => u === `${BASE}/products/` && o?.method === "POST"
-    );
-    expect(createCall).toBeDefined();
-    const body = JSON.parse(createCall![1].body as string);
-    expect(body.name).toBe("Test Product");
-    expect(body.availableInStore).toBe(true);
-  });
-
-  it("imports images into the media library and sends medias with a string id", async () => {
-    const fetchMock = routeFetch(PRODUCT_ROUTES);
-    globalThis.fetch = fetchMock;
-
-    await createProduct(SAMPLE_PRODUCT);
-
-    const calls = (fetchMock as ReturnType<typeof vi.fn>).mock.calls;
-    const uploadCall = calls.find(([u]) => String(u).includes("upload-file"));
-    expect(uploadCall).toBeDefined();
-    expect(uploadCall![1].body).toBeInstanceOf(FormData);
-
-    const createCall = calls.find(([u, o]) => u === `${BASE}/products/` && o?.method === "POST");
-    const body = JSON.parse(createCall![1].body as string);
-    expect(body.medias).toHaveLength(1);
-    expect(body.medias[0].id).toBe("media_1");
-    expect(typeof body.medias[0].id).toBe("string");
-    expect(body.medias[0].isFeatured).toBe(true);
-  });
-
-  it("omits medias when image import fails (never sends empty id)", async () => {
-    const fetchMock = routeFetch([
-      { match: "upload-file", response: {}, ok: false, status: 422 },
-      { match: "/price", response: {} },
-      { match: "/products/", response: { _id: "new_prod_id" } },
-    ]);
-    globalThis.fetch = fetchMock;
-
-    await createProduct(SAMPLE_PRODUCT);
-
-    const calls = (fetchMock as ReturnType<typeof vi.fn>).mock.calls;
-    const createCall = calls.find(([u, o]) => u === `${BASE}/products/` && o?.method === "POST");
-    const body = JSON.parse(createCall![1].body as string);
-    expect(body.medias).toBeUndefined();
-  });
-
-  it("posts a separate price in dollars with sku, quantity and shipping", async () => {
-    const fetchMock = routeFetch(PRODUCT_ROUTES);
-    globalThis.fetch = fetchMock;
-
-    await createProduct(SAMPLE_PRODUCT);
-
-    const calls = (fetchMock as ReturnType<typeof vi.fn>).mock.calls;
-    const priceCall = calls.find(([u]) => String(u).includes("/price"));
-    expect(priceCall![0]).toBe(`${BASE}/products/new_prod_id/price`);
-    expect(priceCall![1].method).toBe("POST");
-
-    const body = JSON.parse(priceCall![1].body as string);
-    expect(body.amount).toBe(9.99); // DOLLARS, not cents
-    expect(body.availableQuantity).toBe(5);
-    expect(body.sku).toBe("TST-001");
-    expect(body.type).toBe("one_time");
-    expect(body.shippingOptions.weight).toEqual({ value: 100, unit: "g" });
-  });
-
-  it("sets availableInStore=false when passed false", async () => {
-    const fetchMock = routeFetch(PRODUCT_ROUTES);
-    globalThis.fetch = fetchMock;
-
-    await createProduct(SAMPLE_PRODUCT, false);
-
-    const calls = (fetchMock as ReturnType<typeof vi.fn>).mock.calls;
-    const createCall = calls.find(([u, o]) => u === `${BASE}/products/` && o?.method === "POST");
-    const body = JSON.parse(createCall![1].body as string);
+  it("createProduct posts action=create and returns productId", async () => {
+    const f = mockFetch({ productId: "p1" });
+    globalThis.fetch = f;
+    const id = await createProduct(SAMPLE_PRODUCT, false);
+    expect(id).toBe("p1");
+    const [url] = (f as unknown as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(url).toBe("/api/ghl");
+    const body = lastBody(f);
+    expect(body.action).toBe("create");
     expect(body.availableInStore).toBe(false);
+    expect(body.product.title).toBe("Test Product");
   });
 
-  it("throws on failed GHL create", async () => {
-    globalThis.fetch = routeFetch([
-      { match: "upload-file", response: { fileId: "m1", url: "u1" } },
-      { match: "/products/", response: { error: "bad" }, ok: false, status: 400 },
-    ]);
-    await expect(createProduct(SAMPLE_PRODUCT)).rejects.toThrow(
-      "GHL create product failed"
-    );
-  });
-});
-
-describe("updateProductQuantity", () => {
-  let originalFetch: typeof fetch;
-
-  beforeEach(() => {
-    originalFetch = globalThis.fetch;
-  });
-  afterEach(() => {
-    globalThis.fetch = originalFetch;
+  it("findProductByBarcode returns null when server returns null", async () => {
+    globalThis.fetch = mockFetch(null);
+    expect(await findProductByBarcode("999")).toBeNull();
   });
 
-  it("sends PUT with correct variant quantity", async () => {
-    const fetchMock = makeFetch({});
-    globalThis.fetch = fetchMock;
-
-    await updateProductQuantity("prod_abc", "var_1", 15);
-
-    const [url, options] = (fetchMock as ReturnType<typeof vi.fn>).mock.calls[0];
-    expect(url).toContain("prod_abc");
-    expect(options.method).toBe("PUT");
-
-    const body = JSON.parse(options.body as string);
-    expect(body.variants[0].id).toBe("var_1");
-    expect(body.variants[0].availableQuantity).toBe(15);
-  });
-});
-
-describe("setProductFeatured", () => {
-  let originalFetch: typeof fetch;
-
-  beforeEach(() => {
-    originalFetch = globalThis.fetch;
-  });
-  afterEach(() => {
-    globalThis.fetch = originalFetch;
+  it("findProductByBarcode maps a found product", async () => {
+    globalThis.fetch = mockFetch({ productId: "p1", name: "N", currentQuantity: 5 });
+    const r = await findProductByBarcode("012345678901");
+    expect(r?.productId).toBe("p1");
+    expect(r?.currentQuantity).toBe(5);
   });
 
-  it("sends PUT with isFeatured flag", async () => {
-    const fetchMock = makeFetch({});
-    globalThis.fetch = fetchMock;
+  it("restockProduct posts action=restock and returns newQuantity", async () => {
+    const f = mockFetch({ productId: "p1", newQuantity: 9 });
+    globalThis.fetch = f;
+    const total = await restockProduct("012345678901", 4);
+    expect(total).toBe(9);
+    const body = lastBody(f);
+    expect(body.action).toBe("restock");
+    expect(body.addQuantity).toBe(4);
+  });
 
-    await setProductFeatured("prod_abc", true);
+  it("restockProduct throws when product not found", async () => {
+    globalThis.fetch = mockFetch(null);
+    await expect(restockProduct("012345678901", 1)).rejects.toThrow();
+  });
 
-    const [url, options] = (fetchMock as ReturnType<typeof vi.fn>).mock.calls[0];
-    expect(url).toContain("prod_abc");
-    expect(options.method).toBe("PUT");
-
-    const body = JSON.parse(options.body as string);
+  it("setProductFeatured posts action=feature", async () => {
+    const f = mockFetch({ ok: true });
+    globalThis.fetch = f;
+    await setProductFeatured("p1", true);
+    const body = lastBody(f);
+    expect(body.action).toBe("feature");
+    expect(body.productId).toBe("p1");
     expect(body.isFeatured).toBe(true);
   });
-});
 
-describe("uploadImage", () => {
-  it("POSTs file to /medias/upload-file and returns the hosted URL", async () => {
-    global.fetch = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({ url: "https://ghl-cdn.example/abc.jpg" }),
-    } as any);
-
-    const fakeFile = new File(["fake-image-data"], "test.jpg", { type: "image/jpeg" });
-    const url = await uploadImage(fakeFile);
-    expect(url).toBe("https://ghl-cdn.example/abc.jpg");
-
-    const [endpoint, options] = (global.fetch as any).mock.calls[0];
-    expect(endpoint).toContain("/medias/upload-file");
-    expect(options.method).toBe("POST");
-    expect(options.body).toBeInstanceOf(FormData);
+  it("activateProduct posts action=activate", async () => {
+    const f = mockFetch({ ok: true });
+    globalThis.fetch = f;
+    await activateProduct("p1");
+    const body = lastBody(f);
+    expect(body.action).toBe("activate");
+    expect(body.productId).toBe("p1");
   });
 
-  it("throws on non-OK response", async () => {
-    global.fetch = vi.fn().mockResolvedValue({
-      ok: false,
-      status: 413,
-      text: async () => "File too large",
-    } as any);
-
-    const fakeFile = new File(["x"], "big.jpg", { type: "image/jpeg" });
-    await expect(uploadImage(fakeFile)).rejects.toThrow(/413/);
+  it("throws on a non-ok response", async () => {
+    globalThis.fetch = mockFetch({ error: "boom" }, false, 502);
+    await expect(createProduct(SAMPLE_PRODUCT)).rejects.toThrow("boom");
   });
 });
