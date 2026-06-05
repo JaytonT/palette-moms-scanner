@@ -98,6 +98,39 @@ function buildShippingOptions(data: ProductData):
 }
 
 /**
+ * Upload an image into the GHL media library by URL (GHL fetches it, no browser
+ * CORS) and return its file id + hosted url. GHL's product `medias` require a
+ * non-empty string `id` (a media-library file id), so external URLs must be
+ * imported here first. Returns null on failure so the caller can skip it.
+ */
+async function uploadImageFromUrl(
+  imageUrl: string,
+  name: string
+): Promise<{ id: string; url: string } | null> {
+  try {
+    const form = new FormData();
+    form.append("fileUrl", imageUrl);
+    form.append("hosted", "true");
+    form.append("name", name);
+    form.append("altType", "location");
+    form.append("altId", GHL_LOCATION_ID);
+
+    const res = await fetch(MEDIAS_ENDPOINT, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${GHL_API_KEY}`, Version: "2021-07-28" },
+      body: form,
+    });
+    if (!res.ok) return null;
+    const d = await res.json();
+    const id = (d.fileId ?? d._id ?? d.id ?? d.mediaId) as string | undefined;
+    const url = (d.url ?? d.fileUrl ?? d.publicUrl ?? imageUrl) as string;
+    return id ? { id, url } : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Create a new product in GHL, then attach its price.
  *
  * GHL models a simple item as a product (NO variants — variants are attribute
@@ -112,8 +145,19 @@ export async function createProduct(
   data: ProductData,
   availableInStore = true
 ): Promise<string> {
-  // 1) Create the product shell.
-  const productPayload = {
+  // 1) Import images into the GHL media library to get file ids. GHL rejects
+  // product medias without a non-empty string `id` (422), so we cannot send raw
+  // external image URLs. Failed imports are skipped; medias is omitted if none.
+  const uploaded = (
+    await Promise.all(
+      data.images
+        .slice(0, 4)
+        .map((url, i) => uploadImageFromUrl(url, `${data.title} image ${i + 1}`))
+    )
+  ).filter((m): m is { id: string; url: string } => m !== null);
+
+  // 2) Create the product shell.
+  const productPayload: Record<string, unknown> = {
     name: data.title,
     description: data.description,
     statementDescriptor: data.barcode,
@@ -121,15 +165,17 @@ export async function createProduct(
     locationId: GHL_LOCATION_ID,
     productType: "PHYSICAL",
     availableInStore,
-    medias: data.images.slice(0, 4).map((url, i) => ({
-      url,
-      title: `${data.title} image ${i + 1}`,
-      type: "image",
-      isFeatured: i === 0,
-    })),
     seoTitle: data.seoTitle,
     seoDescription: data.seoDescription,
   };
+  if (uploaded.length > 0) {
+    productPayload.medias = uploaded.map((m, i) => ({
+      id: m.id,
+      url: m.url,
+      type: "image",
+      isFeatured: i === 0,
+    }));
+  }
 
   const res = await fetch(`${GHL_BASE}/products/`, {
     method: "POST",
