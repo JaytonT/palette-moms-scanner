@@ -3,9 +3,10 @@
 // requireSession(). The passphrase + signing secret live only in function env,
 // never in the browser bundle.
 //
-// Fail-open when UNCONFIGURED: if SCANNER_PASSPHRASE or SCANNER_SECRET is unset,
-// auth is a no-op so a deploy can't lock staff out of the live scanner. Set both
-// env vars in Vercel to enforce it.
+// Enforced when SCANNER_PASSPHRASE + SCANNER_SECRET are set. If they are unset,
+// auth is open ONLY for local dev (no VERCEL_ENV); any real Vercel deploy fails
+// CLOSED (503) so a production/preview push that forgot the secrets cannot
+// silently expose the write endpoints.
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { createHmac, timingSafeEqual } from "node:crypto";
 
@@ -60,8 +61,15 @@ function validCookie(req: VercelRequest): boolean {
 
 /** Returns true if the request may proceed; otherwise writes 401 and returns false. */
 export function requireSession(req: VercelRequest, res: VercelResponse): boolean {
-  if (!authEnabled()) return true; // unconfigured = open, never lock out staff
-  if (validCookie(req)) return true;
-  res.status(401).json({ error: "unauthorized" });
+  if (authEnabled()) {
+    if (validCookie(req)) return true;
+    res.status(401).json({ error: "unauthorized" });
+    return false;
+  }
+  // Unconfigured: open only for local dev (no VERCEL_ENV). Fail CLOSED on any
+  // real Vercel deploy so a forgotten secret can't silently expose writes.
+  const env = process.env.VERCEL_ENV;
+  if (!env || env === "development") return true;
+  res.status(503).json({ error: "auth not configured" });
   return false;
 }
