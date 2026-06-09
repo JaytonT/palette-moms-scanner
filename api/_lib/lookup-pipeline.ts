@@ -236,7 +236,7 @@ export async function runBarcodePipeline(
   type StringFields = Omit<
     ProductData,
     | "quantity"
-    | "skuCode"
+    | "slocCode"
     | "isFeatured"
     | "estimatedFields"
     | "dataSource"
@@ -367,7 +367,7 @@ export async function runBarcodePipeline(
     seoTitle: merged.seoTitle ?? "",
     seoDescription: merged.seoDescription ?? "",
     quantity: 0,
-    skuCode: "",
+    slocCode: "",
     isFeatured: false,
     estimatedFields,
     dataSource,

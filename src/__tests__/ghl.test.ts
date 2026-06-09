@@ -25,7 +25,7 @@ const SAMPLE_PRODUCT: ProductData = {
   seoTitle: "Test Product SEO",
   seoDescription: "Test product SEO description",
   quantity: 5,
-  skuCode: "TST-001",
+  slocCode: "TST-001",
   isFeatured: false,
   estimatedFields: [],
   dataSource: "api",

@@ -45,31 +45,43 @@ export function checkPassphrase(input: string): boolean {
   return safeEqualHex(sign(input), sign(passphrase()));
 }
 
+/** Validate the signed HttpOnly session cookie (`exp.sig`, HMAC over exp). */
 function validCookie(req: VercelRequest): boolean {
-  const raw = req.headers.cookie ?? "";
-  const part = raw.split(/;\s*/).find((c) => c.startsWith(`${COOKIE}=`));
-  if (!part) return false;
-  const value = part.slice(COOKIE.length + 1);
+  const header = req.headers.cookie ?? "";
+  const entry = header.split(/;\s*/).find((c) => c.startsWith(`${COOKIE}=`));
+  if (!entry) return false;
+  const value = entry.slice(COOKIE.length + 1);
   const dot = value.lastIndexOf(".");
   if (dot < 0) return false;
   const exp = value.slice(0, dot);
   const sig = value.slice(dot + 1);
   if (!safeEqualHex(sig, sign(exp))) return false;
-  const expNum = Number(exp);
-  return Number.isFinite(expNum) && expNum > Date.now();
+  const expMs = Number(exp);
+  return Number.isFinite(expMs) && expMs > Date.now();
 }
 
-/** Returns true if the request may proceed; otherwise writes 401 and returns false. */
+/**
+ * Gate the write endpoints (api/ghl, api/media).
+ *
+ * - Secrets set  -> require a valid signed session cookie; 401 otherwise (the
+ *   client then prompts for the passphrase, hits /api/login, and retries).
+ * - Secrets unset on a real Vercel deploy -> fail CLOSED (503): a push that
+ *   forgot SCANNER_PASSPHRASE/SCANNER_SECRET must not silently expose writes.
+ * - Secrets unset with no VERCEL_ENV (local dev) -> open.
+ *
+ * The 2026-06-07 owner-authorized open test window is over (beta clients incoming);
+ * Admin/Manager/User role gating is still tracked separately, but writes are no
+ * longer unauthenticated.
+ */
 export function requireSession(req: VercelRequest, res: VercelResponse): boolean {
-  if (authEnabled()) {
-    if (validCookie(req)) return true;
-    res.status(401).json({ error: "unauthorized" });
-    return false;
+  if (!authEnabled()) {
+    if (process.env.VERCEL_ENV) {
+      res.status(503).json({ error: "Auth not configured" });
+      return false;
+    }
+    return true; // local dev only
   }
-  // Unconfigured: open only for local dev (no VERCEL_ENV). Fail CLOSED on any
-  // real Vercel deploy so a forgotten secret can't silently expose writes.
-  const env = process.env.VERCEL_ENV;
-  if (!env || env === "development") return true;
-  res.status(503).json({ error: "auth not configured" });
+  if (validCookie(req)) return true;
+  res.status(401).json({ error: "Authentication required" });
   return false;
 }

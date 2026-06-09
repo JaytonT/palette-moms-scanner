@@ -8,6 +8,13 @@ import {
   restock,
   setFeatured,
   setActive,
+  updateProduct,
+  setPrice,
+  listCollections,
+  createCollection,
+  getProductDetail,
+  type ProductUpdateFields,
+  type PriceUpdateFields,
 } from "./_lib/ghl-server.js";
 import { requireSession } from "./_lib/auth.js";
 
@@ -51,6 +58,33 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       case "activate": {
         await setActive((body as { productId: string }).productId);
         res.status(200).json({ ok: true });
+        return;
+      }
+      case "detail": {
+        const detail = await getProductDetail((body as { productId: string }).productId);
+        res.status(200).json(detail);
+        return;
+      }
+      case "update": {
+        const b = body as { productId: string; fields: ProductUpdateFields };
+        await updateProduct(b.productId, b.fields);
+        res.status(200).json({ ok: true });
+        return;
+      }
+      case "setPrice": {
+        const b = body as { productId: string; fields: PriceUpdateFields };
+        await setPrice(b.productId, b.fields);
+        res.status(200).json({ ok: true });
+        return;
+      }
+      case "collections": {
+        const collections = await listCollections();
+        res.status(200).json({ collections });
+        return;
+      }
+      case "createCollection": {
+        const created = await createCollection((body as { name: string }).name);
+        res.status(200).json(created);
         return;
       }
       default:

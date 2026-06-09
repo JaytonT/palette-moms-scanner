@@ -26,7 +26,7 @@ function ManualEntry(): ProductData {
     seoTitle: "",
     seoDescription: "",
     quantity: 0,
-    skuCode: "",
+    slocCode: "",
     isFeatured: false,
     estimatedFields: [],
     dataSource: "manual",
@@ -83,7 +83,13 @@ export function Scanner() {
       ]);
       setNotFoundBarcode(null);
       setProduct(
-        uploaded ? { ...data, images: [uploaded.url, ...data.images] } : data
+        uploaded
+          ? {
+              ...data,
+              images: [uploaded.url, ...data.images],
+              imageMedia: [uploaded, ...(data.imageMedia ?? [])],
+            }
+          : data
       );
     } catch (err) {
       toast.error("Could not identify product", {

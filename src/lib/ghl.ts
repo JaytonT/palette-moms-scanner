@@ -118,3 +118,77 @@ export async function uploadImage(file: File): Promise<{ id: string; url: string
   }
   return (await res.json()) as { id: string; url: string };
 }
+
+// ─── Collections (categories) ──────────────────────────────────────────────────
+
+export interface Collection {
+  id: string;
+  name: string;
+}
+
+export async function listCollections(): Promise<Collection[]> {
+  const r = await ghlAction<{ collections: Collection[] }>("collections", {});
+  return r.collections ?? [];
+}
+
+export async function createCollection(name: string): Promise<Collection> {
+  return ghlAction<Collection>("createCollection", { name });
+}
+
+// ─── Editable product detail + updates (Inventory tab) ─────────────────────────
+
+export interface ProductDetail {
+  _id: string;
+  name: string;
+  description: string;
+  statementDescriptor: string;
+  seoTitle: string;
+  seoDescription: string;
+  isFeatured: boolean;
+  availableInStore: boolean;
+  collectionIds: string[];
+  images: { id?: string; url: string }[];
+  amount: string;
+  sloc: string; // GHL price.sku field, labeled SLOC in the UI
+  quantity: number;
+  weight: string;
+  dimensions: string;
+}
+
+export async function getProductDetail(productId: string): Promise<ProductDetail> {
+  return ghlAction<ProductDetail>("detail", { productId });
+}
+
+export interface ProductUpdateFields {
+  name?: string;
+  description?: string;
+  seoTitle?: string;
+  seoDescription?: string;
+  isFeatured?: boolean;
+  availableInStore?: boolean;
+  collectionIds?: string[];
+  medias?: { id: string; url: string; type: string; isFeatured: boolean }[];
+}
+
+export async function updateProductFields(
+  productId: string,
+  fields: ProductUpdateFields
+): Promise<void> {
+  await ghlAction("update", { productId, fields });
+}
+
+export interface PriceUpdateFields {
+  amount?: number;
+  sloc?: string;
+  quantity?: number;
+  weight?: string;
+  dimensions?: string;
+  name?: string;
+}
+
+export async function setProductPrice(
+  productId: string,
+  fields: PriceUpdateFields
+): Promise<void> {
+  await ghlAction("setPrice", { productId, fields });
+}

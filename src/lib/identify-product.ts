@@ -48,7 +48,7 @@ export function mapVisionToProduct(v: VisionResult, scannedBarcode?: string): Pr
     seoTitle: v.seoTitle ?? "",
     seoDescription: v.seoDescription ?? "",
     quantity: 0,
-    skuCode: "",
+    slocCode: "",
     isFeatured: false,
     estimatedFields,
     dataSource: "ai",

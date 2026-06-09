@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Star, Edit2, EyeOff, AlertCircle, CheckCircle2, ScanBarcode, Camera, Upload, X, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import type { ProductData } from "@/types/product";
@@ -7,7 +7,10 @@ import {
   createProduct,
   restockProduct,
   uploadImage,
+  listCollections,
+  type Collection,
 } from "@/lib/ghl";
+import { CollectionPicker } from "@/components/CollectionPicker";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -122,6 +125,15 @@ export function ProductForm({ product: initialProduct, onReset }: ProductFormPro
   const [isDuplicateCheck, setIsDuplicateCheck] = useState(false);
   const [submission, setSubmission] = useState<SubmissionResult | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [collections, setCollections] = useState<Collection[]>([]);
+
+  useEffect(() => {
+    listCollections()
+      .then(setCollections)
+      .catch(() => {
+        /* picker degrades to empty + create-new */
+      });
+  }, []);
 
   // Duplicate dialog state
   const [showDuplicate, setShowDuplicate] = useState(false);
@@ -139,7 +151,13 @@ export function ProductForm({ product: initialProduct, onReset }: ProductFormPro
     try {
       const uploaded = await Promise.all(Array.from(files).map((f) => uploadImage(f)));
       const urls = uploaded.map((u) => u.url);
-      setProduct((prev) => ({ ...prev, images: [...prev.images, ...urls] }));
+      // Keep the GHL media id alongside the url so create attaches it directly
+      // (no flaky second import). Matched back to images[] by url.
+      setProduct((prev) => ({
+        ...prev,
+        images: [...prev.images, ...urls],
+        imageMedia: [...(prev.imageMedia ?? []), ...uploaded],
+      }));
       toast.success(`Added ${urls.length} photo${urls.length > 1 ? "s" : ""}`);
     } catch (err) {
       toast.error("Upload failed", {
@@ -284,8 +302,8 @@ export function ProductForm({ product: initialProduct, onReset }: ProductFormPro
                     <span className="font-medium">{snap.averagePrice || "—"}</span>
                   </div>
                   <div>
-                    <span className="text-muted-foreground">SKU:</span>{" "}
-                    <span className="font-medium">{snap.skuCode || "auto"}</span>
+                    <span className="text-muted-foreground">SLOC:</span>{" "}
+                    <span className="font-medium">{snap.slocCode || "auto"}</span>
                   </div>
                   <div className="col-span-2 text-xs text-muted-foreground break-all">
                     GHL product ID: {s.productId}
@@ -529,13 +547,15 @@ export function ProductForm({ product: initialProduct, onReset }: ProductFormPro
                   <Label htmlFor="category" className="flex items-center">
                     Category {isEstimated("category") && <EstimateTag />}
                   </Label>
-                  <Input
-                    id="category"
-                    value={product.category}
-                    onChange={(e) => update("category", e.target.value)}
-                    disabled={!isEditing}
-                    className="mt-1"
-                  />
+                  <div className="mt-1">
+                    <CollectionPicker
+                      collections={collections}
+                      value={product.collectionId ?? ""}
+                      onChange={(id) => update("collectionId", id)}
+                      onCreated={(c) => setCollections((prev) => [...prev, c])}
+                      disabled={!isEditing}
+                    />
+                  </div>
                 </div>
               </div>
 
@@ -582,13 +602,13 @@ export function ProductForm({ product: initialProduct, onReset }: ProductFormPro
                   />
                 </div>
                 <div>
-                  <Label htmlFor="sku">SKU</Label>
+                  <Label htmlFor="sloc">SLOC</Label>
                   <Input
-                    id="sku"
-                    value={product.skuCode}
-                    onChange={(e) => update("skuCode", e.target.value)}
+                    id="sloc"
+                    value={product.slocCode}
+                    onChange={(e) => update("slocCode", e.target.value)}
                     disabled={!isEditing}
-                    placeholder="Enter SKU"
+                    placeholder="Enter SLOC"
                     className="mt-1"
                   />
                 </div>
