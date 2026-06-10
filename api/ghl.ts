@@ -23,7 +23,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     res.status(405).json({ error: "POST only" });
     return;
   }
-  if (!requireSession(req, res)) return;
+  if (!(await requireSession(req, res))) return;
   const body =
     (typeof req.body === "string" ? safeParse(req.body) : req.body) ?? {};
   const action = (body as { action?: string }).action;

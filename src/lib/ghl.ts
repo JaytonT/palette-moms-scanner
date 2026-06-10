@@ -1,38 +1,20 @@
 import type { ProductData } from "@/types/product";
 import { fileToDownscaledBase64 } from "@/lib/identify-product";
+import { accessToken } from "@/lib/supabase";
 
 // Thin client. ALL GHL writes run server-side (api/ghl.ts, api/media.ts) so the
 // GHL token lives only in the function runtime and never ships in the browser
-// bundle. This module just calls those endpoints.
+// bundle. This module just calls those endpoints, authenticated with the staff
+// user's Supabase access token (verified server-side).
 
-// Prompt for the staff passphrase and exchange it for a session cookie. Returns
-// true if a session was established. The passphrase never persists in the bundle
-// or storage; the HttpOnly cookie set by /api/login carries the session.
-async function login(): Promise<boolean> {
-  const passphrase = window.prompt("Enter the staff passphrase to continue:");
-  if (passphrase == null) return false;
-  const res = await fetch("/api/login", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ passphrase }),
-  });
-  return res.ok;
-}
-
-// POST JSON; on a 401 (auth enforced, no session), prompt for the passphrase and
-// retry once. Server endpoints are no-ops on auth when unconfigured, so this path
-// only triggers once the env vars are set.
+// POST JSON with the signed-in user's Supabase access token as a Bearer header.
+// A 401 means the session is missing or expired; AuthGate handles re-login, so
+// callers just surface the error.
 async function apiPost(url: string, body: unknown): Promise<Response> {
-  const opts: RequestInit = {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  };
-  let res = await fetch(url, opts);
-  if (res.status === 401 && (await login())) {
-    res = await fetch(url, opts);
-  }
-  return res;
+  const token = await accessToken();
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  return fetch(url, { method: "POST", headers, body: JSON.stringify(body) });
 }
 
 async function ghlAction<T>(action: string, payload: Record<string, unknown>): Promise<T> {

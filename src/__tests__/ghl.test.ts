@@ -1,4 +1,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+
+// The client attaches the signed-in user's Supabase access token as a Bearer
+// header. Mock the supabase wrapper so tests run without a real session.
+vi.mock("@/lib/supabase", () => ({
+  accessToken: vi.fn(async () => "test-token"),
+  authConfigured: false,
+  supabase: {},
+}));
+
 import {
   findProductByBarcode,
   createProduct,
@@ -122,34 +131,12 @@ describe("ghl client (server-routed)", () => {
     await expect(createProduct(SAMPLE_PRODUCT)).rejects.toThrow("boom");
   });
 
-  it("on 401 prompts for passphrase, logs in, and retries once", async () => {
-    const prompt = vi.fn(() => "secret-pass");
-    vi.stubGlobal("prompt", prompt);
-    let ghlCalls = 0;
-    const f = vi.fn((url: string) => {
-      if (url === "/api/login") {
-        return Promise.resolve({
-          ok: true, status: 200,
-          json: () => Promise.resolve({ ok: true }),
-          text: () => Promise.resolve("{}"),
-        });
-      }
-      ghlCalls += 1;
-      const unauthorized = ghlCalls === 1;
-      const body = unauthorized ? { error: "unauthorized" } : { productId: "p1" };
-      return Promise.resolve({
-        ok: !unauthorized, status: unauthorized ? 401 : 200,
-        json: () => Promise.resolve(body),
-        text: () => Promise.resolve(JSON.stringify(body)),
-      });
-    }) as unknown as typeof fetch;
+  it("attaches the Supabase access token as a Bearer header", async () => {
+    const f = mockFetch({ productId: "p1" });
     globalThis.fetch = f;
-
-    const id = await createProduct(SAMPLE_PRODUCT);
-    expect(id).toBe("p1");
-    const urls = (f as unknown as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0]);
-    expect(urls).toEqual(["/api/ghl", "/api/login", "/api/ghl"]);
-    expect(prompt).toHaveBeenCalled();
-    vi.unstubAllGlobals();
+    await createProduct(SAMPLE_PRODUCT);
+    const headers = (f as unknown as ReturnType<typeof vi.fn>).mock.calls[0][1]
+      .headers as Record<string, string>;
+    expect(headers.Authorization).toBe("Bearer test-token");
   });
 });
