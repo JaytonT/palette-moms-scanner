@@ -26,17 +26,28 @@ function bearer(req: VercelRequest): string {
   return h.startsWith("Bearer ") ? h.slice(7).trim() : "";
 }
 
-// Validate the access token by asking Supabase who it belongs to. 200 = a real,
-// unexpired user. Works for HS256 (legacy) and asymmetric (new) signing keys.
-async function validToken(token: string): Promise<boolean> {
-  if (!token) return false;
+// Optional staff allowlist. Public signup is on for the project, so this is the
+// hard gate: when set, only these emails may write. Unset = any authenticated
+// Supabase user is allowed.
+function allowedEmails(): string[] {
+  return (process.env.SCANNER_ALLOWED_EMAILS ?? "")
+    .split(",")
+    .map((e) => e.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+// Resolve the access token to its Supabase user. Returns the user (with email)
+// or null. Works for HS256 (legacy) and asymmetric (new) signing keys.
+async function getUser(token: string): Promise<{ email?: string } | null> {
+  if (!token) return null;
   try {
     const res = await fetch(`${supabaseUrl()}/auth/v1/user`, {
       headers: { Authorization: `Bearer ${token}`, apikey: supabaseAnonKey() },
     });
-    return res.ok;
+    if (!res.ok) return null;
+    return (await res.json()) as { email?: string };
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -59,7 +70,15 @@ export async function requireSession(
     }
     return true; // local dev only
   }
-  if (await validToken(bearer(req))) return true;
-  res.status(401).json({ error: "Authentication required" });
-  return false;
+  const user = await getUser(bearer(req));
+  if (!user) {
+    res.status(401).json({ error: "Authentication required" });
+    return false;
+  }
+  const allow = allowedEmails();
+  if (allow.length > 0 && !allow.includes((user.email ?? "").toLowerCase())) {
+    res.status(403).json({ error: "Not authorized" });
+    return false;
+  }
+  return true;
 }
