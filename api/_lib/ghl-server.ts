@@ -277,10 +277,15 @@ interface FoundProduct {
 }
 
 export async function findByBarcode(barcode: string): Promise<FoundProduct | null> {
+  // Never match on an empty/short/missing barcode. Photo-identified items often
+  // have no barcode; matching "" would false-hit any record with a blank
+  // statementDescriptor and send a brand-new item down the restock path, losing it.
+  const key = (barcode ?? "").trim();
+  if (key.length < 6) return null;
   // Page the full catalog — a 100-cap match here would miss existing products and
   // turn re-scans into duplicate creates.
   const products = await listAllProducts();
-  const match = products.find((p) => p.statementDescriptor === barcode);
+  const match = products.find((p) => (p.statementDescriptor ?? "").trim() === key);
   if (!match) return null;
 
   const prRes = await fetch(

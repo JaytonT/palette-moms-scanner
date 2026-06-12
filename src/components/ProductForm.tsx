@@ -188,8 +188,12 @@ export function ProductForm({ product: initialProduct, onReset }: ProductFormPro
       return;
     }
 
-    // Duplicate check
-    if (!skipDuplicateCheck) {
+    // Duplicate check only when there is a real barcode. Photo-identified items
+    // usually have none ("" or "MANUAL"); a blank/garbage barcode must never match
+    // an existing record, or the new item gets restocked into a phantom and lost.
+    const code = (product.barcode ?? "").trim();
+    const hasRealBarcode = code.length >= 6 && code.toUpperCase() !== "MANUAL";
+    if (!skipDuplicateCheck && hasRealBarcode) {
       setIsDuplicateCheck(true);
       try {
         const existing = await findProductByBarcode(product.barcode);
