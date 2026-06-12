@@ -343,6 +343,91 @@ export async function restock(
   return { productId: found.productId, newQuantity };
 }
 
+// ─── Name-based duplicate match (barcode-less catalog) ─────────────────────────
+// Most products here have no barcode, so re-photographing an item can't dedup by
+// barcode. Offer staff likely matches by name; they confirm add-to-existing or
+// create-new. Matching is suggestive only, never automatic.
+
+function normalizeName(s: string): string {
+  return (s || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .replace(/\s+/g, " ");
+}
+
+// 0..1 similarity: token Jaccard, boosted when one name contains the other.
+function nameScore(a: string, b: string): number {
+  if (!a || !b) return 0;
+  if (a === b) return 1;
+  const ta = new Set(a.split(" ").filter(Boolean));
+  const tb = new Set(b.split(" ").filter(Boolean));
+  if (ta.size === 0 || tb.size === 0) return 0;
+  let inter = 0;
+  for (const t of ta) if (tb.has(t)) inter++;
+  const jaccard = inter / (ta.size + tb.size - inter);
+  return a.includes(b) || b.includes(a) ? Math.max(jaccard, 0.8) : jaccard;
+}
+
+export interface NameMatch {
+  productId: string;
+  name: string;
+  quantity: number;
+  heroUrl?: string;
+}
+
+export async function findByName(name: string): Promise<NameMatch[]> {
+  const q = normalizeName(name);
+  if (q.length < 3) return [];
+  const products = await listAllProducts();
+  const scored = products
+    .filter((p) => p.productType === "PHYSICAL")
+    .map((p) => ({ p, s: nameScore(q, normalizeName(p.name || "")) }))
+    .filter((x) => x.s >= 0.5)
+    .sort((a, b) => b.s - a.s)
+    .slice(0, 5);
+  return Promise.all(
+    scored.map(async ({ p }) => {
+      const { price } = await getFirstPrice(p._id);
+      const medias = (p.medias as Array<{ url?: string }>) || [];
+      return {
+        productId: p._id,
+        name: p.name || "",
+        quantity: Number(price?.availableQuantity ?? 0),
+        heroUrl: medias[0]?.url,
+      };
+    })
+  );
+}
+
+// Add stock to a specific product by id (the name-match "add to this" path).
+export async function restockById(
+  productId: string,
+  addQuantity: number
+): Promise<{ productId: string; newQuantity: number } | null> {
+  const { priceId, price } = await getFirstPrice(productId);
+  if (!priceId || !price) return null;
+  const newQuantity = Number(price.availableQuantity ?? 0) + addQuantity;
+  const body: Record<string, unknown> = {
+    name: price.name ?? "Default",
+    type: price.type ?? "one_time",
+    currency: price.currency ?? "USD",
+    amount: price.amount ?? 0,
+    sku: price.sku,
+    availableQuantity: newQuantity,
+    trackInventory: true,
+    allowOutOfStockPurchases: price.allowOutOfStockPurchases ?? false,
+    locationId: locationId(),
+  };
+  const res = await fetch(`${GHL_BASE}/products/${productId}/price/${priceId}`, {
+    method: "PUT",
+    headers: jsonHeaders(),
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`GHL restockById failed: ${res.status} ${await res.text()}`);
+  return { productId, newQuantity };
+}
+
 export async function setFeatured(productId: string, isFeatured: boolean): Promise<void> {
   const res = await fetch(`${GHL_BASE}/products/${productId}`, {
     method: "PUT",
@@ -573,29 +658,47 @@ export async function getInventory(): Promise<InventoryItem[]> {
   const all = await listAllProducts();
   const products = all.filter((p) => p.productType === "PHYSICAL");
 
+  // The list endpoint omits medias AND collectionIds, so the row needs the
+  // product detail (for the thumbnail + category) plus the price (for quantity).
   return mapWithConcurrency(products, 4, async (p) => {
     let quantity = 0;
+    let medias: unknown[] = [];
+    let collectionIds: string[] = [];
+    let isFeatured = !!p.isFeatured;
+    let availableInStore = p.availableInStore;
+    let name = p.name;
+    let statementDescriptor = p.statementDescriptor;
     try {
-      const pr = await fetch(
-        `${GHL_BASE}/products/${p._id}/price?locationId=${locationId()}`,
-        { headers: jsonHeaders() }
-      );
+      const [dr, pr] = await Promise.all([
+        fetch(`${GHL_BASE}/products/${p._id}?locationId=${locationId()}`, { headers: jsonHeaders() }),
+        fetch(`${GHL_BASE}/products/${p._id}/price?locationId=${locationId()}`, { headers: jsonHeaders() }),
+      ]);
+      if (dr.ok) {
+        const dbody = await dr.json();
+        const d = (dbody.product ?? dbody) as Record<string, any>;
+        medias = d.medias ?? [];
+        collectionIds = d.collectionIds ?? [];
+        isFeatured = !!d.isFeatured;
+        availableInStore = d.availableInStore;
+        name = d.name ?? name;
+        statementDescriptor = d.statementDescriptor ?? statementDescriptor;
+      }
       if (pr.ok) {
         const pd = await pr.json();
         const prices: Array<{ availableQuantity?: number }> = pd.prices ?? [];
         quantity = prices.reduce((s, x) => s + (x.availableQuantity ?? 0), 0);
       }
     } catch {
-      /* leave 0 */
+      /* leave defaults */
     }
     return {
       _id: p._id,
-      name: p.name,
-      statementDescriptor: p.statementDescriptor,
-      availableInStore: p.availableInStore,
-      isFeatured: p.isFeatured,
-      collectionIds: p.collectionIds ?? [],
-      medias: p.medias ?? [],
+      name,
+      statementDescriptor,
+      availableInStore,
+      isFeatured,
+      collectionIds,
+      medias,
       quantity,
     };
   });

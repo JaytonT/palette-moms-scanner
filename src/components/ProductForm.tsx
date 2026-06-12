@@ -4,12 +4,14 @@ import { toast } from "sonner";
 import type { ProductData } from "@/types/product";
 import {
   findProductByBarcode,
+  findProductsByName,
   createProduct,
-  restockProduct,
+  restockProductById,
   updateProductFields,
   uploadImage,
   listCollections,
   type Collection,
+  type NameMatch,
 } from "@/lib/ghl";
 import { CollectionPicker } from "@/components/CollectionPicker";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -112,6 +114,62 @@ function DuplicateDialog({
   );
 }
 
+// ─── Name-match dialog (barcode-less duplicate suggestion) ─────────────────────
+
+interface NameMatchDialogProps {
+  matches: NameMatch[];
+  addQuantity: number;
+  onPick: (m: NameMatch) => void;
+  onCreateNew: () => void;
+  onCancel: () => void;
+}
+
+function NameMatchDialog({ matches, addQuantity, onPick, onCreateNew, onCancel }: NameMatchDialogProps) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/50 p-4">
+      <div className="bg-card my-8 w-full max-w-sm rounded-lg border p-6 shadow-lg">
+        <h3 className="text-lg font-semibold">Is this the same item?</h3>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Found {matches.length === 1 ? "a product" : "products"} with a similar name. Add your{" "}
+          {addQuantity} to one of these, or create a new product.
+        </p>
+
+        <div className="mt-4 space-y-2">
+          {matches.map((m) => (
+            <button
+              key={m.productId}
+              type="button"
+              onClick={() => onPick(m)}
+              className="flex w-full items-center gap-3 rounded-lg border p-2 text-left hover:bg-muted"
+            >
+              {m.heroUrl ? (
+                <img src={m.heroUrl} alt="" className="h-10 w-10 flex-shrink-0 rounded border object-cover" />
+              ) : (
+                <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded bg-muted text-[10px] text-muted-foreground">
+                  No img
+                </div>
+              )}
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-medium">{m.name}</p>
+                <p className="text-xs text-muted-foreground">{m.quantity} in stock → add {addQuantity}</p>
+              </div>
+            </button>
+          ))}
+        </div>
+
+        <div className="mt-5 flex flex-col gap-2">
+          <Button onClick={onCreateNew} className="w-full">
+            None of these, create new
+          </Button>
+          <Button variant="outline" onClick={onCancel} className="w-full">
+            Cancel
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Main ProductForm ─────────────────────────────────────────────────────────
 
 interface ProductFormProps {
@@ -140,6 +198,8 @@ export function ProductForm({ product: initialProduct, onReset }: ProductFormPro
   const [showDuplicate, setShowDuplicate] = useState(false);
   const [existingQuantity, setExistingQuantity] = useState(0);
   const [existingProductId, setExistingProductId] = useState<string | null>(null);
+  const [showNameMatch, setShowNameMatch] = useState(false);
+  const [nameMatches, setNameMatches] = useState<NameMatch[]>([]);
 
   const isEstimated = (field: string) =>
     product.estimatedFields?.includes(field) ?? false;
@@ -180,22 +240,76 @@ export function ProductForm({ product: initialProduct, onReset }: ProductFormPro
       return { ...prev, images: [hero, ...imgs] };
     });
 
-  const handleSubmit = async (skipDuplicateCheck = false) => {
-    if (!product.quantity || product.quantity <= 0) {
-      toast.error("Quantity required", {
-        description: "Enter a quantity before adding.",
+  // Photos already uploaded to GHL (have an id), ordered with images[0] as hero.
+  const buildMedias = () => {
+    const byUrl = new Map((product.imageMedia ?? []).map((m) => [m.url, m] as const));
+    return product.images
+      .map((u) => byUrl.get(u))
+      .filter((m): m is { id: string; url: string } => !!m)
+      .map((m, i) => ({ id: m.id, url: m.url, type: "image", isFeatured: i === 0 }));
+  };
+
+  const createNow = async () => {
+    setShowNameMatch(false);
+    setIsSubmitting(true);
+    try {
+      const availableInStore = product.confidence !== "low";
+      const productId = await createProduct(product, availableInStore);
+      setSubmission({ mode: "created", productId, availableInStore, snapshot: product });
+    } catch (err) {
+      toast.error("Error", {
+        description: err instanceof Error ? err.message : "Failed to add product.",
       });
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  // Add quantity to an existing product and attach the new photo to it.
+  const addToExisting = async (productId: string, priorQty: number) => {
+    setShowNameMatch(false);
+    setShowDuplicate(false);
+    setIsSubmitting(true);
+    try {
+      const addedQuantity = product.quantity ?? 0;
+      const newTotal = await restockProductById(productId, addedQuantity);
+      const medias = buildMedias();
+      if (medias.length > 0) {
+        await updateProductFields(productId, { medias }).catch((e) =>
+          console.warn("Photo update on restock failed:", e)
+        );
+      }
+      setSubmission({
+        mode: "updated",
+        existingQuantity: priorQty,
+        addedQuantity,
+        newTotal,
+        snapshot: product,
+      });
+    } catch (err) {
+      toast.error("Error", {
+        description: err instanceof Error ? err.message : "Failed to update.",
+      });
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleSubmit = async () => {
+    if (!product.quantity || product.quantity <= 0) {
+      toast.error("Quantity required", { description: "Enter a quantity before adding." });
       return;
     }
 
-    // Duplicate check only when there is a real barcode. Photo-identified items
-    // usually have none ("" or "MANUAL"); a blank/garbage barcode must never match
-    // an existing record, or the new item gets restocked into a phantom and lost.
+    // A real scanned barcode dedups by barcode. Otherwise (photo items, no
+    // barcode) suggest matches by name and let the user confirm. A blank/garbage
+    // barcode must never match, or the new item gets restocked into a phantom.
     const code = (product.barcode ?? "").trim();
     const hasRealBarcode = code.length >= 6 && code.toUpperCase() !== "MANUAL";
-    if (!skipDuplicateCheck && hasRealBarcode) {
-      setIsDuplicateCheck(true);
-      try {
+
+    setIsDuplicateCheck(true);
+    try {
+      if (hasRealBarcode) {
         const existing = await findProductByBarcode(product.barcode);
         if (existing) {
           setExistingQuantity(existing.currentQuantity ?? 0);
@@ -204,68 +318,24 @@ export function ProductForm({ product: initialProduct, onReset }: ProductFormPro
           setShowDuplicate(true);
           return;
         }
-      } catch (err) {
-        console.warn("Duplicate check failed, proceeding with create:", err);
+      } else if (product.title.trim()) {
+        const matches = await findProductsByName(product.title);
+        if (matches.length > 0) {
+          setNameMatches(matches);
+          setIsDuplicateCheck(false);
+          setShowNameMatch(true);
+          return;
+        }
       }
-      setIsDuplicateCheck(false);
-    }
-
-    // Create new product
-    setIsSubmitting(true);
-    try {
-      const availableInStore = product.confidence !== "low";
-      const productId = await createProduct(product, availableInStore);
-      setSubmission({
-        mode: "created",
-        productId,
-        availableInStore,
-        snapshot: product,
-      });
     } catch (err) {
-      toast.error("Error", {
-        description:
-          err instanceof Error ? err.message : "Failed to add product.",
-      });
-    } finally {
-      setIsSubmitting(false);
+      console.warn("Duplicate check failed, creating new:", err);
     }
+    setIsDuplicateCheck(false);
+    await createNow();
   };
 
   const handleConfirmDuplicate = async () => {
-    setShowDuplicate(false);
-    setIsSubmitting(true);
-    try {
-      const addedQuantity = product.quantity ?? 0;
-      // Quantity lives on the GHL price; restock adds to the current total.
-      const newTotal = await restockProduct(product.barcode, addedQuantity);
-      // Restock is quantity-only, so push the freshly taken photo onto the
-      // existing product too (it usually has none). Non-blocking: a failed image
-      // update must not fail the restock the user already confirmed.
-      const mediaByUrl = new Map((product.imageMedia ?? []).map((m) => [m.url, m] as const));
-      const medias = product.images
-        .map((u) => mediaByUrl.get(u))
-        .filter((m): m is { id: string; url: string } => !!m)
-        .map((m, i) => ({ id: m.id, url: m.url, type: "image", isFeatured: i === 0 }));
-      if (existingProductId && medias.length > 0) {
-        await updateProductFields(existingProductId, { medias }).catch((e) =>
-          console.warn("Restock photo update failed:", e)
-        );
-      }
-      setSubmission({
-        mode: "updated",
-        existingQuantity,
-        addedQuantity,
-        newTotal,
-        snapshot: product,
-      });
-    } catch (err) {
-      toast.error("Error", {
-        description:
-          err instanceof Error ? err.message : "Failed to update.",
-      });
-    } finally {
-      setIsSubmitting(false);
-    }
+    if (existingProductId) await addToExisting(existingProductId, existingQuantity);
   };
 
   const isLoading = isSubmitting || isDuplicateCheck;
@@ -380,6 +450,16 @@ export function ProductForm({ product: initialProduct, onReset }: ProductFormPro
           addQuantity={product.quantity ?? 0}
           onConfirm={handleConfirmDuplicate}
           onCancel={() => setShowDuplicate(false)}
+        />
+      )}
+
+      {showNameMatch && (
+        <NameMatchDialog
+          matches={nameMatches}
+          addQuantity={product.quantity ?? 0}
+          onPick={(m) => addToExisting(m.productId, m.quantity)}
+          onCreateNew={createNow}
+          onCancel={() => setShowNameMatch(false)}
         />
       )}
 

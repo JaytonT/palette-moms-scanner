@@ -72,6 +72,32 @@ export async function restockProduct(
   return r.newQuantity;
 }
 
+export interface NameMatch {
+  productId: string;
+  name: string;
+  quantity: number;
+  heroUrl?: string;
+}
+
+/** Suggest existing products with a similar name (barcode-less dedup). */
+export async function findProductsByName(name: string): Promise<NameMatch[]> {
+  const r = await ghlAction<{ matches: NameMatch[] }>("findByName", { name });
+  return r.matches ?? [];
+}
+
+/** Add stock to a specific product by id. Returns the new total. */
+export async function restockProductById(
+  productId: string,
+  addQuantity: number
+): Promise<number> {
+  const r = await ghlAction<{ productId: string; newQuantity: number } | null>(
+    "restockById",
+    { productId, addQuantity }
+  );
+  if (!r) throw new Error("Product not found to restock");
+  return r.newQuantity;
+}
+
 export async function setProductFeatured(
   productId: string,
   isFeatured: boolean

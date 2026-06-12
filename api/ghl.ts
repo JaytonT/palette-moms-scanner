@@ -5,7 +5,9 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import {
   createProductWithPrice,
   findByBarcode,
+  findByName,
   restock,
+  restockById,
   setFeatured,
   setActive,
   updateProduct,
@@ -46,6 +48,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       case "restock": {
         const b = body as { barcode: string; addQuantity: number };
         const r = await restock(b.barcode, b.addQuantity);
+        res.status(200).json(r);
+        return;
+      }
+      case "findByName": {
+        const matches = await findByName((body as { name: string }).name);
+        res.status(200).json({ matches });
+        return;
+      }
+      case "restockById": {
+        const b = body as { productId: string; addQuantity: number };
+        const r = await restockById(b.productId, b.addQuantity);
         res.status(200).json(r);
         return;
       }
