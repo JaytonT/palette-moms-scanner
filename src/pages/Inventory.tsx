@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Loader2, Pencil, Star, Camera, Upload, X, RefreshCw } from "lucide-react";
+import { Loader2, Pencil, Star, Camera, Upload, X, RefreshCw, Search } from "lucide-react";
 import { toast } from "sonner";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -307,6 +307,7 @@ export function Inventory() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
+  const [query, setQuery] = useState("");
   const [staged, setStaged] = useState<Record<string, Draft>>({});
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingDraft, setEditingDraft] = useState<Draft | null>(null);
@@ -438,6 +439,20 @@ export function Inventory() {
     await load();
   };
 
+  // Client-side search over name, barcode, and category. The full list is already
+  // loaded, so filtering is instant and avoids endless scrolling.
+  const q = query.trim().toLowerCase();
+  const filtered = q
+    ? items.filter((item) => {
+        const v = view(item);
+        return (
+          (v.name ?? "").toLowerCase().includes(q) ||
+          (v.barcode ?? "").toLowerCase().includes(q) ||
+          (collectionName(v.collectionId) ?? "").toLowerCase().includes(q)
+        );
+      })
+    : items;
+
   if (loading) {
     return (
       <div className="flex justify-center p-20">
@@ -473,8 +488,37 @@ export function Inventory() {
         </div>
       </div>
 
+      <div className="relative">
+        <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+        <Input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search by name, barcode, or category"
+          className="pl-9"
+        />
+        {q && (
+          <button
+            type="button"
+            aria-label="Clear search"
+            onClick={() => setQuery("")}
+            className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        )}
+      </div>
+
+      {q && (
+        <p className="-mt-2 text-sm text-muted-foreground">
+          {filtered.length} of {items.length} shown
+        </p>
+      )}
+
       <div className="space-y-2">
-        {items.map((item) => {
+        {filtered.length === 0 ? (
+          <p className="py-10 text-center text-muted-foreground">No products match "{query}".</p>
+        ) : (
+          filtered.map((item) => {
           const v = view(item);
           return (
             <Card key={item._id} className={v.unsynced ? "border-amber-300" : ""}>
@@ -518,7 +562,8 @@ export function Inventory() {
               </CardContent>
             </Card>
           );
-        })}
+          })
+        )}
       </div>
 
       {editingId && editingDraft && (

@@ -6,6 +6,7 @@ import {
   findProductByBarcode,
   createProduct,
   restockProduct,
+  updateProductFields,
   uploadImage,
   listCollections,
   type Collection,
@@ -138,6 +139,7 @@ export function ProductForm({ product: initialProduct, onReset }: ProductFormPro
   // Duplicate dialog state
   const [showDuplicate, setShowDuplicate] = useState(false);
   const [existingQuantity, setExistingQuantity] = useState(0);
+  const [existingProductId, setExistingProductId] = useState<string | null>(null);
 
   const isEstimated = (field: string) =>
     product.estimatedFields?.includes(field) ?? false;
@@ -193,6 +195,7 @@ export function ProductForm({ product: initialProduct, onReset }: ProductFormPro
         const existing = await findProductByBarcode(product.barcode);
         if (existing) {
           setExistingQuantity(existing.currentQuantity ?? 0);
+          setExistingProductId(existing.productId);
           setIsDuplicateCheck(false);
           setShowDuplicate(true);
           return;
@@ -231,6 +234,19 @@ export function ProductForm({ product: initialProduct, onReset }: ProductFormPro
       const addedQuantity = product.quantity ?? 0;
       // Quantity lives on the GHL price; restock adds to the current total.
       const newTotal = await restockProduct(product.barcode, addedQuantity);
+      // Restock is quantity-only, so push the freshly taken photo onto the
+      // existing product too (it usually has none). Non-blocking: a failed image
+      // update must not fail the restock the user already confirmed.
+      const mediaByUrl = new Map((product.imageMedia ?? []).map((m) => [m.url, m] as const));
+      const medias = product.images
+        .map((u) => mediaByUrl.get(u))
+        .filter((m): m is { id: string; url: string } => !!m)
+        .map((m, i) => ({ id: m.id, url: m.url, type: "image", isFeatured: i === 0 }));
+      if (existingProductId && medias.length > 0) {
+        await updateProductFields(existingProductId, { medias }).catch((e) =>
+          console.warn("Restock photo update failed:", e)
+        );
+      }
       setSubmission({
         mode: "updated",
         existingQuantity,
