@@ -66,17 +66,14 @@ export function Scanner() {
     }
   };
 
-  const handleIdentifyPhoto = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    e.target.value = "";
-    if (!file) return;
-    setLoadingLabel("Reading the package...");
+  // Identify the product from a photo AND upload that same photo to GHL so it
+  // becomes the product image. Run together; a failed upload must not block
+  // identification. Pass any scanned barcode (from the not-found fallback) so the
+  // identified product keeps it. Used by the in-app camera and the gallery pick.
+  const identifyFromFile = async (file: File) => {
+    setLoadingLabel("Reading the item...");
     setLoading(true);
     try {
-      // Identify the product from the photo AND upload that same photo to GHL so
-      // it becomes the product image. Run together; a failed upload must not
-      // block identification. Pass the scanned barcode (from the not-found
-      // fallback) so the identified product keeps its barcode.
       const [data, uploaded] = await Promise.all([
         identifyProductFromImage(file, notFoundBarcode ?? undefined),
         uploadImage(file).catch(() => null),
@@ -100,6 +97,12 @@ export function Scanner() {
     }
   };
 
+  const handleIdentifyPhoto = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (file) void identifyFromFile(file);
+  };
+
   const handleManualEntry = () => {
     // Carry the scanned barcode into a manual entry if we came from not-found.
     const base = ManualEntry();
@@ -121,9 +124,9 @@ export function Scanner() {
     <>
       <BarcodeScanner
         isScanning={isScanning}
-        onScanSuccess={(barcode) => {
+        onPhotoCapture={(file) => {
           setIsScanning(false);
-          handleLookup(barcode);
+          void identifyFromFile(file);
         }}
         onClose={() => setIsScanning(false)}
       />
@@ -192,23 +195,23 @@ export function Scanner() {
             <Button
               size="lg"
               className="w-full h-16 text-lg gap-3"
-              onClick={() => photoInputRef.current?.click()}
+              onClick={() => setIsScanning(true)}
             >
-              <Sparkles className="h-6 w-6" />
-              Identify by Photo
+              <Camera className="h-6 w-6" />
+              Take Photo to Identify
             </Button>
             <p className="text-center text-xs text-muted-foreground -mt-2">
-              Snap the front of the package. Best for items not in barcode databases.
+              Fill the frame with the item. AI reads the photo and fills in the details.
             </p>
 
             <Button
               size="lg"
               variant="outline"
               className="w-full h-14 text-base gap-3"
-              onClick={() => setIsScanning(true)}
+              onClick={() => photoInputRef.current?.click()}
             >
-              <Camera className="h-5 w-5" />
-              Scan Barcode
+              <Sparkles className="h-5 w-5" />
+              Choose a Photo
             </Button>
 
             <div className="relative">

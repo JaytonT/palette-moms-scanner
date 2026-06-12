@@ -1,132 +1,38 @@
 import { useEffect, useRef, useState } from "react";
-import { BrowserMultiFormatReader, type IScannerControls } from "@zxing/browser";
-import { DecodeHintType, BarcodeFormat } from "@zxing/library";
 import { Button } from "./ui/button";
 import { Camera, X, Image as ImageIcon, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 
+// In-app camera, PHOTO FIRST. Tapping Capture freezes the current frame and hands
+// it straight to AI identify (the item is recognised from the picture). No barcode
+// reticle, no "center the barcode" gate: barcodes are unreliable on this stock, so
+// the flow is just "photograph the item." The captured photo also becomes the
+// product image.
 interface BarcodeScannerProps {
-  onScanSuccess: (barcode: string) => void;
+  onPhotoCapture: (file: File) => void;
   isScanning: boolean;
   onClose: () => void;
-}
-
-// Retail 1D formats only. Locking the format list is half the reliability win:
-// it stops the decoder wasting frames hunting QR / data-matrix / aztec.
-const ZXING_FORMATS = [
-  BarcodeFormat.EAN_13,
-  BarcodeFormat.EAN_8,
-  BarcodeFormat.UPC_A,
-  BarcodeFormat.UPC_E,
-  BarcodeFormat.CODE_128,
-  BarcodeFormat.CODE_39,
-  BarcodeFormat.ITF,
-];
-const NATIVE_FORMATS = ["ean_13", "ean_8", "upc_a", "upc_e", "code_128", "code_39", "itf"];
-
-function makeZxingReader(): BrowserMultiFormatReader {
-  const hints = new Map();
-  hints.set(DecodeHintType.POSSIBLE_FORMATS, ZXING_FORMATS);
-  hints.set(DecodeHintType.TRY_HARDER, true);
-  return new BrowserMultiFormatReader(hints, { delayBetweenScanAttempts: 120 });
-}
-
-// The browser-native BarcodeDetector is hardware-backed and far faster than a
-// JS decoder, but it is absent on iOS Safari. Feature-detect; fall back to ZXing.
-type NativeDetector = {
-  detect: (src: CanvasImageSource | Blob) => Promise<Array<{ rawValue: string }>>;
-};
-function getNativeDetector(): NativeDetector | null {
-  const BD = (globalThis as unknown as { BarcodeDetector?: new (opts: unknown) => NativeDetector })
-    .BarcodeDetector;
-  if (!BD) return null;
-  try {
-    return new BD({ formats: NATIVE_FORMATS });
-  } catch {
-    return null;
-  }
-}
-
-// Decode a still image (a photo the user took or one the client sent).
-// This is the most forgiving path: one frame, no motion blur, TRY_HARDER on.
-async function decodeImageFile(file: File): Promise<string | null> {
-  const native = getNativeDetector();
-  if (native) {
-    try {
-      const bitmap = await createImageBitmap(file);
-      const found = await native.detect(bitmap);
-      (bitmap as ImageBitmap).close?.();
-      if (found && found.length > 0) return found[0].rawValue;
-    } catch {
-      // fall through to ZXing
-    }
-  }
-  const url = URL.createObjectURL(file);
-  try {
-    const result = await makeZxingReader().decodeFromImageUrl(url);
-    return result.getText();
-  } catch {
-    return null;
-  } finally {
-    URL.revokeObjectURL(url);
-  }
-}
-
-// Decode a single frozen frame (the live "Capture" button). A still beats the
-// live loop on a phone that won't continuously autofocus: the user taps when the
-// barcode looks sharp, and we decode that one full-resolution frame. Native
-// detector first (fast), ZXing as the guaranteed fallback.
-async function decodeCanvas(canvas: HTMLCanvasElement): Promise<string | null> {
-  const native = getNativeDetector();
-  if (native) {
-    try {
-      const found = await native.detect(canvas);
-      if (found && found.length > 0) return found[0].rawValue;
-    } catch {
-      // fall through to ZXing
-    }
-  }
-  try {
-    const result = await makeZxingReader().decodeFromImageUrl(canvas.toDataURL("image/png"));
-    return result.getText();
-  } catch {
-    return null;
-  }
 }
 
 const CAMERA_CONSTRAINTS: MediaStreamConstraints = {
   video: {
     facingMode: { ideal: "environment" },
-    width: { ideal: 1280 },
-    height: { ideal: 720 },
+    width: { ideal: 1920 },
+    height: { ideal: 1080 },
     // focusMode is not in the TS lib yet; harmless where unsupported.
     advanced: [{ focusMode: "continuous" } as unknown as MediaTrackConstraintSet],
   },
 };
 
-export const BarcodeScanner = ({ onScanSuccess, isScanning, onClose }: BarcodeScannerProps) => {
+export const BarcodeScanner = ({ onPhotoCapture, isScanning, onClose }: BarcodeScannerProps) => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
-  const controlsRef = useRef<IScannerControls | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
-  const rafRef = useRef<number | null>(null);
   const doneRef = useRef(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isCameraReady, setIsCameraReady] = useState(false);
-  const [isDecodingPhoto, setIsDecodingPhoto] = useState(false);
+  const [isCapturing, setIsCapturing] = useState(false);
 
   const stopCamera = () => {
-    if (rafRef.current != null) {
-      cancelAnimationFrame(rafRef.current);
-      rafRef.current = null;
-    }
-    if (controlsRef.current) {
-      try {
-        controlsRef.current.stop();
-      } catch {
-        /* noop */
-      }
-      controlsRef.current = null;
-    }
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((t) => t.stop());
       streamRef.current = null;
@@ -139,13 +45,6 @@ export const BarcodeScanner = ({ onScanSuccess, isScanning, onClose }: BarcodeSc
     setIsCameraReady(false);
   };
 
-  const handleHit = (text: string) => {
-    if (doneRef.current) return;
-    doneRef.current = true;
-    stopCamera();
-    onScanSuccess(text);
-  };
-
   const startCamera = async () => {
     if (!window.isSecureContext) {
       toast.error("Camera requires HTTPS", {
@@ -156,23 +55,15 @@ export const BarcodeScanner = ({ onScanSuccess, isScanning, onClose }: BarcodeSc
     }
     if (!navigator.mediaDevices?.getUserMedia) {
       toast.error("Camera not supported", {
-        description: "This browser can't access the camera. Use 'Scan from Photo' instead.",
+        description: "This browser can't access the camera. Use 'Choose a Photo' instead.",
       });
       return;
     }
-
     const video = videoRef.current;
     if (!video) return;
-    const native = getNativeDetector();
-
     try {
       const stream = await navigator.mediaDevices.getUserMedia(CAMERA_CONSTRAINTS);
       streamRef.current = stream;
-
-      // Reveal the live feed the moment frames arrive. This is deliberately NOT
-      // gated on decoder startup: on a cold camera the decoder attach can hang,
-      // and gating display behind it left the preview black until the app was
-      // backgrounded and refocused. Drive readiness off the video's own events.
       const markReady = () => {
         if (!doneRef.current) setIsCameraReady(true);
       };
@@ -180,107 +71,59 @@ export const BarcodeScanner = ({ onScanSuccess, isScanning, onClose }: BarcodeSc
       video.onplaying = markReady;
       video.srcObject = stream;
       void video.play().then(markReady).catch(() => {});
-
-      // ZXing reads the already-playing element as the reliable baseline on every
-      // device (it passes the 1D decode test suite). Fire-and-forget on purpose:
-      // its startup must never block the preview from showing.
-      makeZxingReader()
-        .decodeFromVideoElement(video, (result) => {
-          if (result) handleHit(result.getText());
-        })
-        .then((controls) => {
-          controlsRef.current = controls;
-        })
-        .catch((e) => console.warn("ZXing live decode failed to start:", e));
-
-      if (native) {
-        // Race the native detector for speed. First engine to hit wins;
-        // handleHit is idempotent via doneRef, so a double hit is harmless.
-        let loggedErr = false;
-        const loop = async () => {
-          if (!streamRef.current || doneRef.current) return;
-          if (video.videoWidth > 0) {
-            try {
-              const codes = await native.detect(video);
-              if (codes && codes.length > 0) {
-                handleHit(codes[0].rawValue);
-                return;
-              }
-            } catch (e) {
-              if (!loggedErr) {
-                loggedErr = true;
-                console.warn("Native BarcodeDetector failed; ZXing is carrying the scan:", e);
-              }
-            }
-          }
-          rafRef.current = requestAnimationFrame(loop);
-        };
-        rafRef.current = requestAnimationFrame(loop);
-      }
     } catch (err) {
-      console.error("Error starting scanner:", err);
+      console.error("Error starting camera:", err);
       const msg = err instanceof Error ? err.message : String(err);
       toast.error("Camera Error", {
-        description: msg || "Could not access camera. Try 'Scan from Photo' instead.",
+        description: msg || "Could not access camera. Try 'Choose a Photo' instead.",
       });
     }
   };
 
-  // Manual shutter: freeze the current preview frame and decode it. Center-crop
-  // to the reticle region so the barcode gets maximum pixel density and the
-  // decoder isn't distracted by background clutter.
-  const handleCapture = async () => {
+  // Freeze the current frame as a full-resolution JPEG and send it to identify.
+  const handleCapture = () => {
     const video = videoRef.current;
     if (!video || video.videoWidth === 0 || doneRef.current) return;
-    setIsDecodingPhoto(true);
-    try {
-      const vw = video.videoWidth;
-      const vh = video.videoHeight;
-      const cropW = Math.round(vw * 0.9);
-      const cropH = Math.round(vh * 0.5);
-      const sx = Math.round((vw - cropW) / 2);
-      const sy = Math.round((vh - cropH) / 2);
-      const canvas = document.createElement("canvas");
-      canvas.width = cropW;
-      canvas.height = cropH;
-      const ctx = canvas.getContext("2d");
-      if (!ctx) return;
-      ctx.drawImage(video, sx, sy, cropW, cropH, 0, 0, cropW, cropH);
-      const code = await decodeCanvas(canvas);
-      if (code) {
-        handleHit(code); // stops the camera
-      } else {
-        toast.error("No barcode in that frame", {
-          description: "Center the barcode in the box, hold steady, tap Capture again.",
-        });
-      }
-    } finally {
-      setIsDecodingPhoto(false);
+    setIsCapturing(true);
+    const canvas = document.createElement("canvas");
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) {
+      setIsCapturing(false);
+      return;
     }
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    canvas.toBlob(
+      (blob) => {
+        if (!blob) {
+          setIsCapturing(false);
+          toast.error("Could not capture the photo. Try again.");
+          return;
+        }
+        doneRef.current = true;
+        const file = new File([blob], "item-photo.jpg", { type: "image/jpeg" });
+        stopCamera();
+        onPhotoCapture(file);
+      },
+      "image/jpeg",
+      0.9
+    );
   };
 
-  const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  // Pick an existing photo from the gallery instead of using the live camera.
+  const handlePhotoPick = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    e.target.value = ""; // allow re-picking the same file
+    e.target.value = "";
     if (!file) return;
+    doneRef.current = true;
     stopCamera();
-    setIsDecodingPhoto(true);
-    const code = await decodeImageFile(file);
-    setIsDecodingPhoto(false);
-    if (code) {
-      handleHit(code);
-    } else {
-      toast.error("No barcode found in that photo", {
-        description: "Fill the frame with the barcode, keep it flat, avoid glare, then try again.",
-      });
-      void startCamera(); // resume live scanning so they can retry
-    }
+    onPhotoCapture(file);
   };
 
   useEffect(() => {
     if (!isScanning) return;
     doneRef.current = false;
-    // Defer until after paint so the <video> element exists.
     const rafId = requestAnimationFrame(() => void startCamera());
     return () => {
       cancelAnimationFrame(rafId);
@@ -307,7 +150,7 @@ export const BarcodeScanner = ({ onScanSuccess, isScanning, onClose }: BarcodeSc
             <X className="h-6 w-6" />
           </Button>
 
-          <div className="relative overflow-hidden rounded-2xl shadow-elevated bg-black aspect-[4/3]">
+          <div className="relative overflow-hidden rounded-2xl shadow-elevated bg-black aspect-[3/4]">
             <video
               ref={videoRef}
               className="absolute inset-0 h-full w-full object-cover"
@@ -315,16 +158,12 @@ export const BarcodeScanner = ({ onScanSuccess, isScanning, onClose }: BarcodeSc
               playsInline
               autoPlay
             />
-            {/* Wide reticle: retail barcodes are wide and short, guide accordingly. */}
-            <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-              <div className="h-[28%] w-[82%] rounded-lg border-2 border-white/80 shadow-[0_0_0_2000px_rgba(0,0,0,0.35)]" />
-            </div>
-            {(!isCameraReady || isDecodingPhoto) && (
+            {(!isCameraReady || isCapturing) && (
               <div className="absolute inset-0 flex items-center justify-center bg-black/70 pointer-events-none">
-                {isDecodingPhoto ? (
+                {isCapturing ? (
                   <div className="flex items-center gap-2 text-white">
                     <Loader2 className="h-6 w-6 animate-spin" />
-                    <span className="text-sm">Reading photo...</span>
+                    <span className="text-sm">Capturing...</span>
                   </div>
                 ) : (
                   <Camera className="h-12 w-12 animate-pulse text-white" />
@@ -334,7 +173,7 @@ export const BarcodeScanner = ({ onScanSuccess, isScanning, onClose }: BarcodeSc
           </div>
 
           <p className="text-center text-sm text-muted-foreground">
-            Center the barcode in the box. It scans on its own, or tap Capture when it looks sharp.
+            Fill the frame with the item and tap Capture. We'll identify it from the photo.
           </p>
 
           <div className="space-y-3">
@@ -343,10 +182,10 @@ export const BarcodeScanner = ({ onScanSuccess, isScanning, onClose }: BarcodeSc
               size="lg"
               onClick={handleCapture}
               className="w-full"
-              disabled={!isCameraReady || isDecodingPhoto}
+              disabled={!isCameraReady || isCapturing}
             >
               <Camera className="mr-2 h-5 w-5" />
-              Capture & Scan
+              Capture
             </Button>
 
             <Button
@@ -354,19 +193,19 @@ export const BarcodeScanner = ({ onScanSuccess, isScanning, onClose }: BarcodeSc
               size="lg"
               onClick={() => fileInputRef.current?.click()}
               className="w-full"
-              disabled={isDecodingPhoto}
+              disabled={isCapturing}
             >
               <ImageIcon className="mr-2 h-5 w-5" />
-              Scan from Photo
+              Choose a Photo
             </Button>
             <input
               ref={fileInputRef}
               type="file"
               accept="image/*"
-              onChange={handlePhotoUpload}
+              onChange={handlePhotoPick}
               className="hidden"
-              aria-label="Upload barcode photo"
-              title="Upload barcode photo"
+              aria-label="Choose a photo"
+              title="Choose a photo"
             />
 
             <Button
